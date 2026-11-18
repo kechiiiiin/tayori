@@ -1,0 +1,10 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "ある人のブログ",
+  "home_page_url": "https://blog.example.jp/",
+  "feed_url": "https://blog.example.jp/feed.json",
+  "items": [
+    { "id": "launcher", "url": "https://blog.example.jp/launcher", "title": "週末に作った小さなランチャーのこと", "date_published": "2026-11-15T10:00:00+09:00" },
+    { "id": 42, "url": "https://blog.example.jp/untitled", "content_text": "題名の無い短い投稿の本文", "date_published": "2026-11-14T10:00:00+09:00" }
+  ]
+}

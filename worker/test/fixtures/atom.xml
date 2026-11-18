@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title type="text">Zenn architecture</title>
+  <link rel="self" href="https://zenn.example/topics/architecture/feed"/>
+  <link rel="alternate" href="https://zenn.example/topics/architecture"/>
+  <id>tag:zenn.example,2026:architecture</id>
+  <updated>2026-11-18T00:00:00Z</updated>
+  <entry>
+    <title type="html">&lt;b&gt;AI エージェント&lt;/b&gt;に任せる仕事、任せない仕事</title>
+    <link rel="alternate" type="text/html" href="https://zenn.example/a/1"/>
+    <link rel="replies" href="https://zenn.example/a/1#comments"/>
+    <id>tag:zenn.example,2026:a1</id>
+    <published>2026-11-17T09:00:00+09:00</published>
+    <updated>2026-11-17T10:00:00+09:00</updated>
+  </entry>
+  <entry>
+    <title>薬局の待ち時間をどう測るか</title>
+    <link href="a/2"/>
+    <id>tag:zenn.example,2026:a2</id>
+    <updated>2026-11-16T09:00:00Z</updated>
+  </entry>
+</feed>

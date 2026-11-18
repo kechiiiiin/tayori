@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel rdf:about="https://diary.example/">
+    <title>ある人の日記</title>
+    <link>https://diary.example/</link>
+  </channel>
+  <item rdf:about="https://diary.example/2026/11/17">
+    <title>山小屋の朝ごはんが好きだという話</title>
+    <link>https://diary.example/2026/11/17</link>
+    <dc:date>2026-11-17T08:00:00+09:00</dc:date>
+  </item>
+</rdf:RDF>

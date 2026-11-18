@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>アニクマ</title>
+    <link>https://anikuma.example/</link>
+    <atom:link href="https://anikuma.example/feed" rel="self" type="application/rss+xml"/>
+    <description>テスト用</description>
+    <item>
+      <title><![CDATA[1on1 を「報告会」にしないための三つの問い]]></title>
+      <link>https://anikuma.example/posts/3</link>
+      <guid isPermaLink="false">post-3</guid>
+      <pubDate>Wed, 18 Nov 2026 05:00:00 +0900</pubDate>
+    </item>
+    <item>
+      <title>設計レビューで &amp;quot;決めない&amp;quot; を決める</title>
+      <link>/posts/2</link>
+      <pubDate>Tue, 17 Nov 2026 12:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>日付の無い記事</title>
+      <guid>https://anikuma.example/posts/1</guid>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,24 @@
+{
+  "name": "tayori-worker",
+  "version": "0.1.0",
+  "description": "便り（tayori）: 自作 RSS フィーダー（Cloudflare Workers + D1）",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler d1 migrations apply tayori --local && wrangler dev --local --ip 127.0.0.1 --port 8792 --local-upstream 127.0.0.1:8792 --define __LOCAL_DEV__:true",
+    "seed": "wrangler d1 execute tayori --local --file seed/demo.sql",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.2.5",
+    "hono": "^4.13.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260922.1",
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2",
+    "wrangler": "4.131.2"
+  }
+}
