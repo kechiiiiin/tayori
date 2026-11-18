@@ -22,12 +22,6 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<key>TayoriAccessClientID</key>
-	<string>$(TAYORI_ACCESS_CLIENT_ID)</string>
-	<key>TayoriAccessClientSecret</key>
-	<string>$(TAYORI_ACCESS_CLIENT_SECRET)</string>
-	<key>TayoriServerURL</key>
-	<string>$(TAYORI_SERVER_URL)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
@@ -35,6 +29,12 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>TayoriAccessClientID</key>
+	<string>$(TAYORI_ACCESS_CLIENT_ID)</string>
+	<key>TayoriAccessClientSecret</key>
+	<string>$(TAYORI_ACCESS_CLIENT_SECRET)</string>
+	<key>TayoriServerURL</key>
+	<string>$(TAYORI_SERVER_URL)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -53,5 +53,7 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>UIUserInterfaceStyle</key>
+	<string>Light</string>
 </dict>
 </plist>

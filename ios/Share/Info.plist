@@ -20,12 +20,6 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>TayoriAccessClientID</key>
-	<string>$(TAYORI_ACCESS_CLIENT_ID)</string>
-	<key>TayoriAccessClientSecret</key>
-	<string>$(TAYORI_ACCESS_CLIENT_SECRET)</string>
-	<key>TayoriServerURL</key>
-	<string>$(TAYORI_SERVER_URL)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
@@ -37,12 +31,12 @@
 		<dict>
 			<key>NSExtensionActivationRule</key>
 			<dict>
-				<key>NSExtensionActivationSupportsWebURLWithMaxCount</key>
-				<integer>1</integer>
-				<key>NSExtensionActivationSupportsWebPageWithMaxCount</key>
-				<integer>1</integer>
 				<key>NSExtensionActivationSupportsText</key>
 				<true/>
+				<key>NSExtensionActivationSupportsWebPageWithMaxCount</key>
+				<integer>1</integer>
+				<key>NSExtensionActivationSupportsWebURLWithMaxCount</key>
+				<integer>1</integer>
 			</dict>
 		</dict>
 		<key>NSExtensionPointIdentifier</key>
@@ -50,5 +44,13 @@
 		<key>NSExtensionPrincipalClass</key>
 		<string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
 	</dict>
+	<key>TayoriAccessClientID</key>
+	<string>$(TAYORI_ACCESS_CLIENT_ID)</string>
+	<key>TayoriAccessClientSecret</key>
+	<string>$(TAYORI_ACCESS_CLIENT_SECRET)</string>
+	<key>TayoriServerURL</key>
+	<string>$(TAYORI_SERVER_URL)</string>
+	<key>UIUserInterfaceStyle</key>
+	<string>Light</string>
 </dict>
 </plist>
