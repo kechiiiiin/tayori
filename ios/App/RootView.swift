@@ -70,7 +70,7 @@ struct RootView: View {
     }
 
     /// DEBUG のスクリーンショット用: 起動引数で画面の状態を作る
-    ///   -tayoriTab unread|commented|all  -tayoriScreen sites  -tayoriDemo opened|comment|safari  -tayoriSharePreview <URL>
+    ///   -tayoriTab unread|commented|all  -tayoriScreen sites  -tayoriDemo opened|comment|safari|listcomment  -tayoriSharePreview <URL>
     private func applyDemo() async {
         #if DEBUG
         guard !demoApplied else { return }
@@ -89,6 +89,7 @@ struct RootView: View {
         if let u = value("-tayoriSharePreview") { sharePreview = u }
         if let d = value("-tayoriDemo"), let first = model.items.first {
             if d == "safari" { model.presented = first; return }
+            if d == "listcomment" { model.commentDraft = nil; model.commentTarget = first; return }
             model.lastOpened = first
             if d == "comment" {
                 model.commentDraft = "二つ目の問い（「先週から何が変わった？」）は来週のチームの 1on1 で試す。"

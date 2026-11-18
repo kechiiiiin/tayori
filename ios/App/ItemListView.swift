@@ -76,6 +76,10 @@ struct ItemListView: View {
                     .onTapGesture { model.open(item) }
                     .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
                     .listRowBackground(model.lastOpened?.id == item.id ? Theme.highlight : Color(uiColor: .systemBackground))
+                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                        Button { startComment(item) } label: { Label("コメント", systemImage: "text.bubble") }
+                            .tint(Theme.accent)
+                    }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         if item.isRead {
                             Button { Task { await model.setRead(item, false) } } label: { Text("未読に戻す") }
@@ -86,7 +90,9 @@ struct ItemListView: View {
                         }
                     }
                     .contextMenu {
-                        Button { model.commentTarget = item } label: { Label("コメント", systemImage: "square.and.pencil") }
+                        Button { startComment(item) } label: {
+                            Label(item.comment == nil ? "コメント" : "コメントを直す", systemImage: "text.bubble")
+                        }
                         if item.isRead {
                             Button { Task { await model.setRead(item, false) } } label: { Label("未読に戻す", systemImage: "circle") }
                         } else {
@@ -109,6 +115,12 @@ struct ItemListView: View {
         }
         .listStyle(.plain)
         .refreshable { await model.reload() }
+    }
+
+    /// 一覧からコメントを書く。戻りのバー（lastOpened）は触らない
+    private func startComment(_ item: Item) {
+        model.commentDraft = nil
+        model.commentTarget = item
     }
 
     private var empty: some View {
