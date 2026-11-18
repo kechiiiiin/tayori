@@ -21,7 +21,8 @@ export interface FetchDeps {
 
 export const USER_AGENT = "tayori/0.1 (personal feed reader)";
 const FETCH_TIMEOUT_MS = 10_000;
-const MAX_BODY = 5 * 1024 * 1024;
+// ポッドキャストのフィードは全話入りで 5〜10MB になる（rururu の購読に 8.7MB のものがあった）
+const MAX_BODY = 16 * 1024 * 1024;
 /** cron 1回で取りに行く数の既定（Workers Free の subrequest 50 に収まる量） */
 export const DEFAULT_FETCH_PER_RUN = 15;
 const CONCURRENCY = 6;

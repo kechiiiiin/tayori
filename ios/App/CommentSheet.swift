@@ -28,7 +28,7 @@ struct CommentSheet: View {
                 .focused($focused)
                 .scrollContentBackground(.hidden)
                 .padding(6)
-                .frame(minHeight: 110)
+                .frame(minHeight: 110, maxHeight: 180)
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(uiColor: .separator), lineWidth: 1))
             Text("自分だけのメモです。いまは rururu には送りません。")
                 .font(.caption)

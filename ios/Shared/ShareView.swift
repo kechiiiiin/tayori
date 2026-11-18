@@ -13,6 +13,7 @@ struct ShareView: View {
     @State private var creating = false
     @State private var phase: Phase = .idle
     @State private var loadError: String?
+    @State private var autoClose = true
 
     enum Phase: Equatable {
         case idle, adding
@@ -65,7 +66,19 @@ struct ShareView: View {
             Spacer(minLength: 0)
         }
         .padding(16)
-        .task { await loadCategories() }
+        .task {
+            await loadCategories()
+            #if DEBUG
+            // スクリーンショット用: -tayoriShareAutoAdd <カテゴリ名> でそのカテゴリを選んで追加まで進める
+            let args = ProcessInfo.processInfo.arguments
+            if let i = args.firstIndex(of: "-tayoriShareAutoAdd"), args.index(after: i) < args.endIndex {
+                let name = args[args.index(after: i)]
+                selection = categories.first { $0.name == name }?.id
+                autoClose = false
+                add()
+            }
+            #endif
+        }
     }
 
     private var isDone: Bool {
@@ -138,6 +151,7 @@ struct ShareView: View {
                 let r = try await api.addFeed(url: url, categoryId: selection)
                 let cat = categories.first { $0.id == r.feed.categoryId }?.name ?? "未分類"
                 phase = .done(title: r.feed.title, category: cat, created: r.created)
+                guard autoClose else { return }
                 try? await Task.sleep(for: .seconds(1.6))
                 onClose()
             } catch {

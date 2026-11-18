@@ -53,14 +53,16 @@ struct RootView: View {
         .sheet(item: Binding(get: { model.commentTarget }, set: { model.commentTarget = $0 })) { item in
             CommentSheet(item: item, initial: model.commentDraft ?? item.comment ?? "")
                 .presentationDetents([.medium, .large])
+                .presentationBackground(Color(uiColor: .systemBackground))
         }
         .sheet(isPresented: Binding(get: { sharePreview != nil }, set: { if !$0 { sharePreview = nil } })) {
             ShareView(url: sharePreview) { sharePreview = nil }
                 .presentationDetents([.medium])
+                .presentationBackground(Color(uiColor: .systemBackground))
         }
         .task {
             await model.reload()
-            applyDemo()
+            await applyDemo()
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.reload() } }
@@ -68,12 +70,14 @@ struct RootView: View {
     }
 
     /// DEBUG のスクリーンショット用: 起動引数で画面の状態を作る
-    ///   -tayoriTab unread|commented|all  -tayoriScreen sites  -tayoriDemo opened|comment  -tayoriSharePreview <URL>
-    private func applyDemo() {
+    ///   -tayoriTab unread|commented|all  -tayoriScreen sites  -tayoriDemo opened|comment|safari  -tayoriSharePreview <URL>
+    private func applyDemo() async {
         #if DEBUG
         guard !demoApplied else { return }
         demoApplied = true
         let args = ProcessInfo.processInfo.arguments
+        // 起動直後は scenePhase の読み直しと重なるので、一覧が埋まるまで待つ（最大 5 秒）
+        for _ in 0..<50 where model.items.isEmpty { try? await Task.sleep(for: .milliseconds(100)) }
         func value(_ flag: String) -> String? {
             guard let i = args.firstIndex(of: flag), args.index(after: i) < args.endIndex else { return nil }
             return args[args.index(after: i)]
@@ -84,6 +88,7 @@ struct RootView: View {
         if value("-tayoriScreen") == "sites", sizeClass != .regular { path = [.sites] }
         if let u = value("-tayoriSharePreview") { sharePreview = u }
         if let d = value("-tayoriDemo"), let first = model.items.first {
+            if d == "safari" { model.presented = first; return }
             model.lastOpened = first
             if d == "comment" {
                 model.commentDraft = "二つ目の問い（「先週から何が変わった？」）は来週のチームの 1on1 で試す。"

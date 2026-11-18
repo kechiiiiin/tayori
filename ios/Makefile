@@ -45,7 +45,7 @@ sim: generate
 # $(1)=シミュレータ名 $(2)=接頭辞
 define shoot
 	xcrun simctl launch --terminate-running-process "$(1)" $(BUNDLE) -tayoriBaseURL $(LOCAL) $(3)
-	@sleep 5
+	@sleep 8
 	xcrun simctl io "$(1)" screenshot $(SHOTS)/$(2).png
 endef
 
@@ -59,6 +59,7 @@ shots-phone: sim
 	$(call shoot,$(PHONE_SIM),iphone-4-comment,-tayoriDemo comment)
 	$(call shoot,$(PHONE_SIM),iphone-5-commented,-tayoriTab commented)
 	$(call shoot,$(PHONE_SIM),iphone-6-sites,-tayoriScreen sites)
+	$(call shoot,$(PHONE_SIM),iphone-2-safari,-tayoriDemo safari)
 	$(call shoot,$(PHONE_SIM),iphone-7-share,-tayoriSharePreview https://blog.example.jp/)
 
 shots-pad: sim

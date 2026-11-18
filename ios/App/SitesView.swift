@@ -51,7 +51,9 @@ struct SitesView: View {
         }
         .refreshable { await model.reload() }
         .sheet(item: $nameEditor) { e in
-            CategoryNameSheet(editor: e).presentationDetents([.height(220)])
+            CategoryNameSheet(editor: e)
+                .presentationDetents([.height(220)])
+                .presentationBackground(Color(uiColor: .systemBackground))
         }
         .confirmationDialog(
             "「\(removing?.title ?? "")」を外しますか？",

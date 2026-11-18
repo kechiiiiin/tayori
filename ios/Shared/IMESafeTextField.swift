@@ -94,9 +94,9 @@ struct CategoryPicker: View {
                 .font(.footnote)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 6)
-                .foregroundStyle(selected ? Color(uiColor: .systemBackground) : Color.primary)
-                .background(selected ? Color.primary : Color(uiColor: .systemBackground), in: Capsule())
-                .overlay(Capsule().strokeBorder(selected ? Color.primary : Color(uiColor: .separator), lineWidth: 1))
+                .foregroundStyle(selected ? Color(uiColor: .systemBackground) : Color(uiColor: .label))
+                .background(selected ? Color(uiColor: .label) : Color(uiColor: .systemBackground), in: Capsule())
+                .overlay(Capsule().strokeBorder(selected ? Color(uiColor: .label) : Color(uiColor: .separator), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
