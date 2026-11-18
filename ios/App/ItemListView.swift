@@ -179,13 +179,16 @@ struct ItemRow: View {
                     .lineSpacing(2)
                 Text(meta).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 if let c = item.comment {
-                    Text(c)
-                        .font(.caption)
-                        .foregroundStyle(Theme.memoInk)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 6))
-                        .padding(.top, 2)
+                    Label {
+                        Text(c)
+                    } icon: {
+                        Image(systemName: "text.bubble")
+                    }
+                    .labelStyle(CommentLabelStyle())
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .padding(.top, 1)
                 }
             }
             Spacer(minLength: 0)
@@ -202,6 +205,16 @@ struct ItemRow: View {
         }
         if opened { parts.append("さっき開いた") }
         return parts.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+}
+
+/// コメント行: 吹き出しアイコン＋灰色の文字（2行まで）。アイコンは1行目の上端に揃える
+private struct CommentLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            configuration.icon.imageScale(.small)
+            configuration.title.multilineTextAlignment(.leading)
+        }
     }
 }
 
