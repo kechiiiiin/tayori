@@ -33,6 +33,9 @@ final class AppModel {
 
     private let api = TayoriAPI.shared
     private var loadToken = 0
+    /// 起動後の最初の読み込みで、名前が「メイン」のカテゴリへ絞り込む（1回だけ。あとは選んだものを尊重する）
+    static let launchCategoryName = "メイン"
+    private var appliedLaunchCategory = false
 
     // MARK: - 読み込み
 
@@ -47,10 +50,27 @@ final class AppModel {
         isLoading = true
         defer { if token == loadToken { isLoading = false } }
         do {
-            async let page = api.items(state: state, category: category, feed: feedFilter?.id, before: nil)
-            async let cats = api.categories()
-            async let fs = api.feeds()
-            let (p, c, f) = try await (page, cats, fs)
+            let p: ItemPage
+            let c: CategoryList
+            let f: [Feed]
+            if appliedLaunchCategory {
+                async let page = api.items(state: state, category: category, feed: feedFilter?.id, before: nil)
+                async let cats = api.categories()
+                async let fs = api.feeds()
+                (p, c, f) = try await (page, cats, fs)
+            } else {
+                // 初回: 先にカテゴリを取り、「メイン」があればそれで絞ってから一覧を取る
+                async let fs = api.feeds()
+                let cats = try await api.categories()
+                appliedLaunchCategory = true
+                if category == .all, feedFilter == nil,
+                   let main = cats.categories.first(where: { $0.name == Self.launchCategoryName }) {
+                    category = .category(main.id)
+                }
+                p = try await api.items(state: state, category: category, feed: feedFilter?.id, before: nil)
+                c = cats
+                f = try await fs
+            }
             guard token == loadToken else { return }
             items = p.items
             next = p.next
