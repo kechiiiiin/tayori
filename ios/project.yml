@@ -1,0 +1,87 @@
+name: tayori
+
+# 便り（tayori）iOS（設計: jinsei vault hestia/projects/RSSフィーダー設計.md）
+# `*.xcodeproj` は生成物でコミットしない。必ず `xcodegen generate`（make generate）が先
+# iPhone と iPad の両方（TARGETED_DEVICE_FAMILY 1,2）。iPad は全方向の向きを Info.plist に入れてある
+# （家族掲示板は iPad の向きの要件で App Store Connect への upload が弾かれた）
+
+options:
+  bundleIdPrefix: jp.kechiiiiin
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  minimumXcodeGenVersion: "2.40.0"
+
+# Release だけ Secrets.xcconfig（make archive が生成・gitignore）を読む。無ければ空のまま
+configFiles:
+  Release: Config/Release.xcconfig
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+    TARGETED_DEVICE_FAMILY: "1,2"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    GENERATE_INFOPLIST_FILE: NO
+    CODE_SIGN_STYLE: Automatic
+    # 有料チーム（Apple Developer Program）の Team ID。環境変数 TAYORI_TEAM_ID から入れる
+    # （Makefile が ~/.config/kazoku-keijiban/team-id を読む。家族掲示板と同じチーム）。
+    DEVELOPMENT_TEAM: "${TAYORI_TEAM_ID}"
+    # Worker の URL（秘密ではない）
+    TAYORI_SERVER_URL: "https://tayori.kechiiiiin.com"
+
+targets:
+  Tayori:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes:
+          - "Info.plist"
+          - "*.entitlements"
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_NAME: Tayori
+        PRODUCT_BUNDLE_IDENTIFIER: jp.kechiiiiin.tayori
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_EMIT_LOC_STRINGS: YES
+        ENABLE_PREVIEWS: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - target: TayoriShare
+
+  TayoriShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Share
+        excludes:
+          - "Info.plist"
+          - "*.entitlements"
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_NAME: TayoriShare
+        PRODUCT_BUNDLE_IDENTIFIER: jp.kechiiiiin.tayori.share
+        INFOPLIST_FILE: Share/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Share/Share.entitlements
+        SKIP_INSTALL: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+
+schemes:
+  Tayori:
+    build:
+      targets:
+        Tayori: all
+        TayoriShare: all
+    run:
+      config: Debug
+    archive:
+      config: Release
