@@ -14,8 +14,8 @@ custom_domain = true
 [[d1_databases]]
 binding = "DB"
 database_name = "tayori"
-# `wrangler d1 create tayori` の出力で置き換える（まだ作っていない）
-database_id = "00000000-0000-0000-0000-000000000000"
+# 2026-11-18 `wrangler d1 create tayori` で作成
+database_id = "84cf27f8-4a6b-4b8e-919d-b53f8baa802d"
 migrations_dir = "migrations"
 
 # 30 分ごとにフィードを取りに行く（src/index.ts の scheduled）
