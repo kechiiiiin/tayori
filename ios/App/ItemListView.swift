@@ -142,17 +142,18 @@ struct CategoryBar: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .firstTextBaseline, spacing: 16) {
+            HStack(alignment: .bottom, spacing: 0) {
                 tab("すべて", model.count(model.categories.total), .all)
                 ForEach(model.categories.categories) { c in
                     tab(c.name, model.count(c.counts), .category(c.id))
                 }
                 tab("未分類", model.count(model.categories.uncategorized), .none)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 6)
         }
     }
 
+    /// 押せる範囲は文字より広く（左右 10pt・上 12pt・高さ 44pt 以上）。見た目の間隔は前と同じ 20pt ほど
     private func tab(_ name: String, _ n: Int, _ f: CategoryFilter) -> some View {
         let on = model.category == f
         return Button { model.select(category: f) } label: {
@@ -165,6 +166,10 @@ struct CategoryBar: View {
                 Rectangle().fill(on ? Theme.accent : .clear).frame(height: 2)
             }
             .fixedSize()
+            .padding(.horizontal, 10)
+            .padding(.top, 12)
+            .frame(minHeight: 44, alignment: .bottom)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(on ? .isSelected : [])
