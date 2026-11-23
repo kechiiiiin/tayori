@@ -41,13 +41,16 @@ struct RootView: View {
                 }
             }
         }
-        .fullScreenCover(item: Binding(get: { model.presented }, set: { model.presented = $0 }), onDismiss: nil) { item in
-            if let url = item.link {
-                SafariView(url: url) {
-                    model.presented = nil
-                    model.returned(from: item)
-                }
-                .ignoresSafeArea()
+        // アプリ内 Safari は SwiftUI の fullScreenCover ではなく UIKit の present で出す（左端スワイプで閉じられるように・SafariView.swift）
+        .onChange(of: model.presented?.id) { _, id in
+            guard id != nil, let item = model.presented else { return }
+            guard let url = item.link else {
+                model.presented = nil
+                return
+            }
+            SafariPresenter.present(url: url) {
+                model.presented = nil
+                model.returned(from: item)
             }
         }
         .sheet(item: Binding(get: { model.commentTarget }, set: { model.commentTarget = $0 })) { item in

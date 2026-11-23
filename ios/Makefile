@@ -2,6 +2,7 @@
 #
 #   make generate   xcodegen で .xcodeproj を作る（生成物はコミットしない）
 #   make sim        シミュレータ向けにビルドだけ通す（Team ID 不要・アドホック署名）
+#   make uitest     iPhone のシミュレータで UI テスト（Safari を左端スワイプで閉じて戻る・一覧の左右スワイプでカテゴリ）。先に ../worker で npm run dev と npm run seed
 #   make shots      iPhone と iPad のシミュレータで起動してスクリーンショット（先に ../worker で npm run dev と npm run seed）
 #   make archive    TestFlight 向けアーカイブ（Release・自動署名）。サービストークンをこの Mac のキーチェーンから埋め込む
 #   make export-testflight  .ipa を build/export/ に書き出す（送らない）
@@ -30,7 +31,7 @@ ARCHIVE = build/Tayori.xcarchive
 KC_SERVICE ?= tayori-token
 SECRETS = Secrets.xcconfig
 
-.PHONY: generate sim shots shots-phone shots-pad icon clean archive upload export-testflight release require-team require-asc-key
+.PHONY: generate sim uitest shots shots-phone shots-pad icon clean archive upload export-testflight release require-team require-asc-key
 
 generate:
 	xcodegen generate
@@ -40,6 +41,14 @@ sim: generate
 	  -destination 'generic/platform=iOS Simulator' -configuration Debug \
 	  -derivedDataPath build-sim CODE_SIGN_IDENTITY=- build
 	@echo "✅ シミュレータ向けのビルドは通る"
+
+# UI テスト（iPhone のシミュレータ・ローカルの Worker）。結果とスクショは build-sim/uitest.xcresult
+uitest: generate
+	@xcrun simctl list devices | grep -q "$(PHONE_SIM) (" || xcrun simctl create "$(PHONE_SIM)" "$(PHONE_TYPE)" > /dev/null
+	rm -rf build-sim/uitest.xcresult
+	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'platform=iOS Simulator,name=$(PHONE_SIM)' \
+	  -configuration Debug -derivedDataPath build-sim -resultBundlePath build-sim/uitest.xcresult \
+	  CODE_SIGN_IDENTITY=- test
 
 # 起動引数で画面の状態を作って撮る（App/RootView.swift の applyDemo）。
 # $(1)=シミュレータ名 $(2)=接頭辞

@@ -75,6 +75,21 @@ targets:
         SKIP_INSTALL: YES
         TARGETED_DEVICE_FAMILY: "1,2"
 
+  # 画面の動きの確かめ（make uitest・ローカルの Worker に向けて動かす）
+  TayoriUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Tayori
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jp.kechiiiiin.tayori.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Tayori
+        TARGETED_DEVICE_FAMILY: "1,2"
+
 schemes:
   Tayori:
     build:
@@ -83,5 +98,9 @@ schemes:
         TayoriShare: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - TayoriUITests
     archive:
       config: Release
