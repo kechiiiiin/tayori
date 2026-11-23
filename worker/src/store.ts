@@ -350,6 +350,27 @@ export async function listItems(
   return { items, next: rows.length > limit ? encodeCursor(items[items.length - 1]) : null };
 }
 
+/** JST の日付（YYYY-MM-DD）→ その日の UTC の範囲 [from, to)。暦に無い日付・形違いは null */
+export function jstDayRange(date: string): { from: string; to: string } | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const startUtc = Date.UTC(y, mo - 1, d) - 9 * 3600_000; // JST 0:00 = 前日の UTC 15:00
+  const check = new Date(startUtc + 9 * 3600_000);
+  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) return null;
+  return { from: new Date(startUtc).toISOString(), to: new Date(startUtc + 86400_000).toISOString() };
+}
+
+/** read_at が JST のその日に入る記事（read_at 昇順）。かけら帳の「思い出す材料」用 */
+export async function listReadOn(db: D1Database, range: { from: string; to: string }): Promise<ItemView[]> {
+  return (
+    await db
+      .prepare(`${ITEM_VIEW} WHERE i.read_at >= ? AND i.read_at < ? ORDER BY i.read_at ASC, i.id ASC LIMIT 500`)
+      .bind(range.from, range.to)
+      .all<ItemView>()
+  ).results;
+}
+
 export async function getItem(db: D1Database, id: number): Promise<ItemView | null> {
   return db.prepare(`${ITEM_VIEW} WHERE i.id = ?`).bind(id).first<ItemView>();
 }

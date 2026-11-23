@@ -36,6 +36,7 @@ docs/screenshots/  シミュレータの実画面
 | メソッド | パス | 本文・クエリ |
 | --- | --- | --- |
 | GET | `/api/items` | `state=unread\|commented\|all`・`category=<id>\|none`・`feed=<id>`・`before=<next>`・`limit` → `{ items, next }` |
+| GET | `/api/items/read-on?date=YYYY-MM-DD` | `read_at` が JST のその日の記事を `read_at` 昇順で（かけら帳 iOS の「読んだ記事」）→ `{ items }`。日付が不正なら 400 `bad_date` |
 | POST / DELETE | `/api/items/:id/read` | 既読にする／戻す → `{ item }` |
 | PUT | `/api/items/:id/comment` | `{ comment }`（空文字で消す）→ `{ item }` |
 | GET | `/api/categories` | → `{ categories: [{ id, name, sort, unread, commented }], uncategorized, total }` |

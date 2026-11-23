@@ -18,6 +18,8 @@ import {
   listCategories,
   listFeeds,
   listItems,
+  listReadOn,
+  jstDayRange,
   normalizeComment,
   normalizeName,
   setComment,
@@ -104,6 +106,13 @@ export function createApp(deps: AppDeps = defaultDeps) {
     const limitQ = c.req.query("limit");
     const limit = limitQ ? parseId(limitQ) ?? undefined : undefined;
     return c.json(await listItems(c.env.DB, { state, category, feed: feed ?? undefined, before, limit }));
+  });
+
+  /** 指定日（JST）に既読にした記事を read_at 昇順で（かけら帳 iOS の「読んだ記事」）。:id より先に置く */
+  app.get("/api/items/read-on", async (c) => {
+    const range = jstDayRange(c.req.query("date") ?? "");
+    if (!range) return err(c, 400, "bad_date");
+    return c.json({ items: await listReadOn(c.env.DB, range) });
   });
 
   /** 1件（通知をタップして開くとき） */
