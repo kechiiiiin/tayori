@@ -303,7 +303,6 @@ struct QueueListView: View {
     @State private var store = PodcastStore.shared
     let queue: PodcastQueue
     var onRename: () -> Void = {}
-    @State private var moving: Episode?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -322,22 +321,12 @@ struct QueueListView: View {
                 .refreshable { await store.refresh() }
                 .tabSwipeGesture()
             } else {
-                // 右端の取っ手（≡）をつかんでドラッグで並べ替え（編集モードなし）・左スワイプで外す・右スワイプで移す。
-                // 行の上の横スワイプは行の操作が優先・行の無い余白の横スワイプで隣のタブへ（QueueCollectionView の中で振り分け）
-                QueueCollectionView(queue: queue, onMoveRequest: { moving = $0 })
+                // 右端の取っ手（≡）をつかんでドラッグで並べ替え（編集モードなし）・外す／別のキューへ移すは長押しメニュー。
+                // 取っ手以外はどこの横スワイプでも隣のタブへ（QueueCollectionView の中で振り分け）
+                QueueCollectionView(queue: queue)
             }
             if let e = store.errorMessage {
                 Text(e).font(.footnote).foregroundStyle(Theme.error).padding(8)
-            }
-        }
-        .confirmationDialog(
-            "「\(moving?.title ?? "")」をどのキューへ移しますか？",
-            isPresented: Binding(get: { moving != nil }, set: { if !$0 { moving = nil } }),
-            titleVisibility: .visible
-        ) {
-            ForEach(store.queues.filter { $0.id != queue.id }) { q in
-                Button("\(q.name)の先頭へ") { if let m = moving { store.add(m, to: q.id, atTop: true) }; moving = nil }
-                Button("\(q.name)の末尾へ") { if let m = moving { store.add(m, to: q.id, atTop: false) }; moving = nil }
             }
         }
     }

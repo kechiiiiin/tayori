@@ -3,25 +3,20 @@ import UIKit
 
 /// キューの中身のリスト（UIKit の UICollectionView）。
 /// - 各行の右端の取っ手（≡）をつかんでドラッグすれば、編集モードに入らずに並べ替えられる（UICellAccessory.reorder・常に表示）
-/// - 左へスワイプで外す（いっぱいに払えばそのまま）・右へスワイプで別のキューへ移す
+/// - 行のスワイプ操作は持たない。外す・別のキューへ移すは長押しメニュー（EpisodeRow の contextMenu）
 /// - 行のタップは詳細ページ・アートワークのタップは番組の画面・長押しはキューのメニュー（行の中身は SwiftUI の EpisodeRow）
-/// - 行の無い余白（短いキューの下など）の左右スワイプは隣のタブへ（environment の tabSwipe へ渡す）。行の上の横スワイプは行の操作が優先
-/// SwiftUI の List は取っ手を出すのに編集モードが要り、編集モードではスワイプが効かないので UIKit にした
+/// - どこを左右に払っても（行の上でも余白でも）隣のタブへ（environment の tabSwipe へ渡す）。ただし右端の取っ手の上で始めたドラッグは並べ替え
+/// SwiftUI の List は取っ手を出すのに編集モードが要るので UIKit にした
 struct QueueCollectionView: UIViewRepresentable {
     let queue: PodcastQueue
-    /// 右へスワイプの「移す」
-    var onMoveRequest: (Episode) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UICollectionView {
         let c = context.coordinator
         c.queueId = queue.id
-        c.onMoveRequest = onMoveRequest
         var config = UICollectionLayoutListConfiguration(appearance: .plain)
         config.backgroundColor = .clear
-        config.trailingSwipeActionsConfigurationProvider = { [weak c] ip in c?.trailingSwipe(ip) }
-        config.leadingSwipeActionsConfigurationProvider = { [weak c] ip in c?.leadingSwipe(ip) }
         let cv = UICollectionView(frame: .zero, collectionViewLayout: UICollectionViewCompositionalLayout.list(using: config))
         cv.backgroundColor = .clear
         // タップは行の中身（SwiftUI）が受ける（詳細ページ・アートワークは番組）。セルの選択は使わない
@@ -44,7 +39,6 @@ struct QueueCollectionView: UIViewRepresentable {
 
     func updateUIView(_ cv: UICollectionView, context: Context) {
         let c = context.coordinator
-        c.onMoveRequest = onMoveRequest
         c.tabSwipe = context.environment.tabSwipe
         c.queueId = queue.id
         c.apply(queue, animated: true)
@@ -53,7 +47,6 @@ struct QueueCollectionView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var queueId = UUID()
-        var onMoveRequest: (Episode) -> Void = { _ in }
         var tabSwipe: TabSwipeHandler?
         private weak var tabPan: UIPanGestureRecognizer?
         private var episodes: [Int: Episode] = [:]
@@ -81,7 +74,10 @@ struct QueueCollectionView: UIViewRepresentable {
             }
         }
 
-        /// 行の無い余白で始まったパンだけを拾い、指の動きを親のタブ切り替えへ渡す（追従・確定の決まりは TabSwipe）。
+        /// 取っ手（右端の UICellAccessory.reorder）の幅。この中で始まったパンはタブに使わず、並べ替えのドラッグに任せる
+        static let handleWidth: CGFloat = 60
+
+        /// 取っ手の上以外で始まったパンを拾い、指の動きを親のタブ切り替えへ渡す（追従・確定の決まりは TabSwipe）。
         /// 縦のスクロールとは同時に認識する（記事の一覧の simultaneousGesture と同じ）
         func installTabPan(on cv: UICollectionView) {
             let pan = UIPanGestureRecognizer(target: self, action: #selector(handleTabPan(_:)))
@@ -104,8 +100,10 @@ struct QueueCollectionView: UIViewRepresentable {
 
         func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
             guard g === tabPan, let cv = g.view as? UICollectionView else { return true }
-            // 行の上で始まったら行のスワイプ（外す・移す）と取っ手のドラッグに任せる
-            return cv.indexPathForItem(at: g.location(in: cv)) == nil
+            // 右端の取っ手の上で始まったら並べ替えのドラッグに任せる（行の上でも余白でもそれ以外はタブ切り替え）
+            let x = g.location(in: cv).x
+            if cv.indexPathForItem(at: g.location(in: cv)) != nil, x > cv.bounds.width - Self.handleWidth { return false }
+            return true
         }
 
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
@@ -120,35 +118,6 @@ struct QueueCollectionView: UIViewRepresentable {
             snap.appendSections([0])
             snap.appendItems(ids)
             dataSource.apply(snap, animatingDifferences: animated)
-        }
-
-        private func episode(at ip: IndexPath) -> Episode? {
-            dataSource.itemIdentifier(for: ip).flatMap { episodes[$0] }
-        }
-
-        func trailingSwipe(_ ip: IndexPath) -> UISwipeActionsConfiguration? {
-            guard let e = episode(at: ip) else { return nil }
-            let remove = UIContextualAction(style: .destructive, title: "外す") { _, _, done in
-                PodcastStore.shared.remove(e.id)
-                done(true)
-            }
-            remove.image = UIImage(systemName: "minus.circle")
-            let c = UISwipeActionsConfiguration(actions: [remove])
-            c.performsFirstActionWithFullSwipe = true
-            return c
-        }
-
-        func leadingSwipe(_ ip: IndexPath) -> UISwipeActionsConfiguration? {
-            guard let e = episode(at: ip), PodcastStore.shared.queues.count > 1 else { return nil }
-            let move = UIContextualAction(style: .normal, title: "移す") { [weak self] _, _, done in
-                self?.onMoveRequest(e)
-                done(true)
-            }
-            move.image = UIImage(systemName: "arrow.right.arrow.left")
-            move.backgroundColor = UIColor(Theme.readGreen)
-            let c = UISwipeActionsConfiguration(actions: [move])
-            c.performsFirstActionWithFullSwipe = false
-            return c
         }
     }
 }

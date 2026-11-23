@@ -2,7 +2,7 @@ import XCTest
 
 /// ポッドキャストの上のタブを一覧の左右スワイプで切り替える（2026-11-24・記事のカテゴリと同じ手触り）
 /// - 新着・番組: 一覧のどこでも（番組は右へだけ・左へは行の「外す」に譲る）
-/// - キュー: 行の上の横スワイプは行の操作（外す・移す）が優先・行の無い余白と見出しの帯で隣のタブへ
+/// - キュー: 行の上でも余白でも見出しの帯でも隣のタブへ（行のスワイプ操作は無い）。右端の取っ手の上のドラッグだけは並べ替え
 /// ローカルの Worker・seed（先に ../worker で npm run dev と npm run seed）
 ///   make uitest TEST_ARGS=-only-testing:TayoriUITests/PodcastTabSwipeUITests
 final class PodcastTabSwipeUITests: XCTestCase {
@@ -62,20 +62,35 @@ final class PodcastTabSwipeUITests: XCTestCase {
         XCTAssertTrue(waitSelected("メイン"))
     }
 
-    /// キューの行の上の横スワイプは行の操作のまま（左へで「外す」・右へで「移す」）で、タブは動かない
-    func testQueueRowSwipeKeepsRowActions() throws {
+    /// キューの行の上の横スワイプでも隣のタブへ動く（行の「外す」「移す」は出ない）
+    func testQueueRowSwipeSwitchesTab() throws {
         launch()
         XCTAssertTrue(tab("メイン").waitForExistence(timeout: 15))
         let row = text("#42")
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         row.swipeLeft()
-        XCTAssertTrue(app.buttons["外す"].firstMatch.waitForExistence(timeout: 3), "行の左スワイプで「外す」が出ない")
-        XCTAssertTrue(tab("メイン").isSelected, "行の左スワイプでタブが動いた")
-        app.buttons["外す"].firstMatch.tap()
-        XCTAssertTrue(waitFor(tab("メイン"), equals: "メイン, 1", timeout: 5), "スワイプで外せない")
-        text("#40").swipeRight()
-        XCTAssertTrue(app.buttons["移す"].firstMatch.waitForExistence(timeout: 3), "行の右スワイプで「移す」が出ない")
-        XCTAssertTrue(tab("メイン").isSelected, "行の右スワイプでタブが動いた")
+        XCTAssertTrue(waitSelected("サブ"), "行の上の左スワイプで右隣のキューへ移らない")
+        XCTAssertFalse(app.buttons["外す"].exists, "行のスワイプの「外す」が出た")
+        // サブの行の上（上の方）で右へ払って戻る
+        swipe(.right, at: 0.3)
+        XCTAssertTrue(waitSelected("メイン"), "行の上の右スワイプで左隣へ戻らない")
+        XCTAssertFalse(app.buttons["移す"].exists, "行のスワイプの「移す」が出た")
+    }
+
+    /// 取っ手（右端）の上のドラッグは並べ替えのままで、タブは動かない
+    func testHandleDragReordersWithoutSwitchingTab() throws {
+        launch()
+        XCTAssertTrue(tab("メイン").waitForExistence(timeout: 15))
+        let a = text("#42"), b = text("#40")
+        XCTAssertTrue(a.waitForExistence(timeout: 10) && b.exists)
+        let window = app.windows.firstMatch
+        let origin = window.coordinate(withNormalizedOffset: .zero)
+        let handle = origin.withOffset(CGVector(dx: window.frame.maxX - 30, dy: a.frame.midY + 10))
+        let target = origin.withOffset(CGVector(dx: window.frame.maxX - 30, dy: b.frame.maxY + 50))
+        handle.press(forDuration: 0.2, thenDragTo: target, withVelocity: .slow, thenHoldForDuration: 0.3)
+        sleep(1)
+        XCTAssertTrue(tab("メイン").isSelected, "取っ手のドラッグでタブが動いた")
+        XCTAssertGreaterThan(text("#42").frame.minY, text("#40").frame.minY, "取っ手のドラッグで並びが変わらない")
     }
 
     /// 縦のスクロールではタブが動かない

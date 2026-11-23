@@ -3,7 +3,7 @@ import XCTest
 /// 2026-11-24 の手直し（ローカルの Worker・seed。先に ../worker で npm run dev と npm run seed）
 /// - 回の行をタップすると再生せずに詳細ページ（番組の回・新着・キューの3か所）
 /// - 詳細の再生ボタン・キューへの追加・概要のリンクはアプリ内 Safari
-/// - キューは右端の取っ手（≡）をドラッグで並べ替え（編集モードなし）・左スワイプで外す
+/// - キューは右端の取っ手（≡）をドラッグで並べ替え（編集モードなし）・外す／別のキューへ移すは長押しメニュー（行のスワイプは持たない）
 /// - 番組名・アートワークから番組の画面へ（詳細・全画面プレーヤー・新着とキューの行）
 /// - 下のタブは「ポッドキャスト｜記事」の順で、起動するとポッドキャスト
 /// - 聴き終えた: 詳細で切り替え・一覧に印・キューから外れる
@@ -94,9 +94,9 @@ final class EpisodeDetailUITests: XCTestCase {
         attach("notes-link-safari")
     }
 
-    // MARK: - キュー: 取っ手で並べ替え・スワイプで外す
+    // MARK: - キュー: 取っ手で並べ替え・長押しメニューで外す／移す
 
-    func testQueueDragHandleReordersAndSwipeStillRemoves() throws {
+    func testQueueDragHandleReordersAndMenuRemovesAndMoves() throws {
         launch()
         XCTAssertTrue(tab("メイン").waitForExistence(timeout: 15))
         let a = text("#42"), b = text("#40")
@@ -117,17 +117,17 @@ final class EpisodeDetailUITests: XCTestCase {
         assertDetail(containing: "#40")
         XCTAssertTrue(waitFor(app.staticTexts["episodeDetailQueueState"], contains: "メインの1番目", timeout: 5))
         back()
-        // 左スワイプ → 外す
-        text("#42").swipeLeft()
-        let remove = app.buttons["外す"].firstMatch
-        if remove.waitForExistence(timeout: 3) { remove.tap() }
-        XCTAssertTrue(waitFor(tab("メイン"), equals: "メイン, 1", timeout: 5), "スワイプで外せない")
-        // 右スワイプ → 移す
-        text("#40").swipeRight()
-        let move = app.buttons["移す"].firstMatch
-        XCTAssertTrue(move.waitForExistence(timeout: 3), "右スワイプの「移す」が無い")
+        // 長押しメニュー → キューから外す
+        text("#42").press(forDuration: 1.2)
+        let remove = app.buttons["キューから外す"].firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout: 3), "長押しメニューに「キューから外す」が無い")
+        remove.tap()
+        XCTAssertTrue(waitFor(tab("メイン"), equals: "メイン, 1", timeout: 5), "長押しメニューで外せない")
+        // 長押しメニュー → サブの末尾へ（別のキューへ移る）
+        text("#40").press(forDuration: 1.2)
+        let move = app.buttons["サブの末尾へ"].firstMatch
+        XCTAssertTrue(move.waitForExistence(timeout: 3), "長押しメニューに「サブの末尾へ」が無い")
         move.tap()
-        app.buttons["サブの末尾へ"].firstMatch.tap()
         XCTAssertTrue(waitFor(tab("サブ"), equals: "サブ, 3", timeout: 5))
     }
 
