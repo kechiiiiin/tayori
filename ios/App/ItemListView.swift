@@ -20,7 +20,7 @@ struct ItemListView: View {
         let favicons: [Int: URL]
     }
 
-    private static let transitionDuration = 0.28
+    private static let transitionDuration = TabSwipe.duration
 
     var body: some View {
         VStack(spacing: 0) {
@@ -111,20 +111,18 @@ struct ItemListView: View {
         // 縦のスクロールを邪魔しないよう、横の動きが縦の倍以上・60pt 以上のときだけ確定。
         // ドラッグ中は指に追従させ、端のカテゴリではゴムのように軽くしか動かない
         .simultaneousGesture(
-            DragGesture(minimumDistance: 24, coordinateSpace: .local)
+            DragGesture(minimumDistance: TabSwipe.minimumDistance, coordinateSpace: .local)
                 .onChanged { v in
                     guard showCategoryBar, model.feedFilter == nil, outgoing == nil else { return }
                     let dx = v.translation.width, dy = v.translation.height
-                    guard abs(dx) > abs(dy) else { return }
-                    let delta = dx < 0 ? 1 : -1
-                    let damping: CGFloat = model.canShiftCategory(by: delta) ? 0.6 : 0.2
-                    liveOffset = dx * damping
+                    guard let o = TabSwipe.followOffset(dx: dx, dy: dy, canMove: { model.canShiftCategory(by: $0) }) else { return }
+                    liveOffset = o
                 }
                 .onEnded { v in
                     guard showCategoryBar, model.feedFilter == nil, outgoing == nil else { return }
                     let dx = v.translation.width, dy = v.translation.height
-                    let delta = dx < 0 ? 1 : -1
-                    if abs(dx) >= 60, abs(dx) > abs(dy) * 2, model.canShiftCategory(by: delta) {
+                    let delta = TabSwipe.delta(dx: dx)
+                    if TabSwipe.shouldCommit(dx: dx, dy: dy), model.canShiftCategory(by: delta) {
                         commitSwipe(delta: delta)
                     } else {
                         withAnimation(.easeOut(duration: Self.transitionDuration)) { liveOffset = 0 }
@@ -271,7 +269,7 @@ struct CategoryBar: View {
             }
             // スワイプで切り替えたとき、選んだタブが見えるところまで寄せる
             .onChange(of: model.category) { _, f in
-                withAnimation(.easeOut(duration: 0.28)) { proxy.scrollTo(f, anchor: .center) }
+                withAnimation(.easeOut(duration: TabSwipe.duration)) { proxy.scrollTo(f, anchor: .center) }
             }
         }
     }
@@ -286,14 +284,8 @@ struct CategoryBar: View {
                     if n > 0 { Text("\(n)").font(.caption2) }
                 }
                 .foregroundStyle(on ? Theme.accent : Color.secondary)
-                ZStack {
-                    Color.clear.frame(height: 2)
-                    if on {
-                        Rectangle().fill(Theme.accent).frame(height: 2)
-                            .matchedGeometryEffect(id: "underline", in: underlineNS)
-                    }
-                }
-                .animation(.easeOut(duration: 0.28), value: model.category)
+                TabUnderline(on: on, namespace: underlineNS)
+                    .animation(.easeOut(duration: TabSwipe.duration), value: model.category)
             }
             .fixedSize()
             .padding(.horizontal, 10)

@@ -41,6 +41,8 @@ struct ShowsView: View {
         }
         .listStyle(.plain)
         .refreshable { await store.refresh() }
+        // 右へのスワイプで左隣（新着）へ。左へのスワイプは行の「外す」に譲る（番組は右端のタブなので右隣も無い）
+        .tabSwipeGesture(reservesForward: true)
         .confirmationDialog(
             "「\(removing?.title ?? "")」を外しますか？",
             isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),

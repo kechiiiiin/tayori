@@ -5,6 +5,7 @@ import UIKit
 /// - 各行の右端の取っ手（≡）をつかんでドラッグすれば、編集モードに入らずに並べ替えられる（UICellAccessory.reorder・常に表示）
 /// - 左へスワイプで外す（いっぱいに払えばそのまま）・右へスワイプで別のキューへ移す
 /// - 行のタップは詳細ページ・アートワークのタップは番組の画面・長押しはキューのメニュー（行の中身は SwiftUI の EpisodeRow）
+/// - 行の無い余白（短いキューの下など）の左右スワイプは隣のタブへ（environment の tabSwipe へ渡す）。行の上の横スワイプは行の操作が優先
 /// SwiftUI の List は取っ手を出すのに編集モードが要り、編集モードではスワイプが効かないので UIKit にした
 struct QueueCollectionView: UIViewRepresentable {
     let queue: PodcastQueue
@@ -34,6 +35,8 @@ struct QueueCollectionView: UIViewRepresentable {
             }
         }, for: .valueChanged)
         cv.refreshControl = refresh
+        c.tabSwipe = context.environment.tabSwipe
+        c.installTabPan(on: cv)
         c.configure(cv)
         c.apply(queue, animated: false)
         return cv
@@ -42,14 +45,17 @@ struct QueueCollectionView: UIViewRepresentable {
     func updateUIView(_ cv: UICollectionView, context: Context) {
         let c = context.coordinator
         c.onMoveRequest = onMoveRequest
+        c.tabSwipe = context.environment.tabSwipe
         c.queueId = queue.id
         c.apply(queue, animated: true)
     }
 
     @MainActor
-    final class Coordinator: NSObject {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var queueId = UUID()
         var onMoveRequest: (Episode) -> Void = { _ in }
+        var tabSwipe: TabSwipeHandler?
+        private weak var tabPan: UIPanGestureRecognizer?
         private var episodes: [Int: Episode] = [:]
         private var dataSource: UICollectionViewDiffableDataSource<Int, Int>!
 
@@ -73,6 +79,37 @@ struct QueueCollectionView: UIViewRepresentable {
                 guard let self else { return }
                 PodcastStore.shared.reorder(in: self.queueId, to: tx.finalSnapshot.itemIdentifiers)
             }
+        }
+
+        /// 行の無い余白で始まったパンだけを拾い、指の動きを親のタブ切り替えへ渡す（追従・確定の決まりは TabSwipe）。
+        /// 縦のスクロールとは同時に認識する（記事の一覧の simultaneousGesture と同じ）
+        func installTabPan(on cv: UICollectionView) {
+            let pan = UIPanGestureRecognizer(target: self, action: #selector(handleTabPan(_:)))
+            pan.delegate = self
+            pan.cancelsTouchesInView = false
+            cv.addGestureRecognizer(pan)
+            tabPan = pan
+        }
+
+        @objc private func handleTabPan(_ g: UIPanGestureRecognizer) {
+            let t = g.translation(in: g.view)
+            let size = CGSize(width: t.x, height: t.y)
+            switch g.state {
+            case .changed: tabSwipe?.changed(size)
+            case .ended: tabSwipe?.ended(size)
+            case .cancelled, .failed: tabSwipe?.ended(.zero)
+            default: break
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard g === tabPan, let cv = g.view as? UICollectionView else { return true }
+            // 行の上で始まったら行のスワイプ（外す・移す）と取っ手のドラッグに任せる
+            return cv.indexPathForItem(at: g.location(in: cv)) == nil
+        }
+
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            g === tabPan
         }
 
         func apply(_ queue: PodcastQueue, animated: Bool) {

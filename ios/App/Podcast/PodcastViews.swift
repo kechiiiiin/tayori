@@ -16,6 +16,13 @@ struct PodcastRootView: View {
     @State private var showAdd = false
     @State private var router = PodcastRouter.shared
     @State private var demoApplied = false
+    /// 一覧の左右スワイプでの切り替え（記事のカテゴリと同じ手触り）。いまのタブの中身の横のずれ
+    @State private var liveOffset: CGFloat = 0
+    /// 切り替え確定の瞬間の「元の」タブ。その中身が端へ抜けるのを演じている間だけ存在する（操作はできない）
+    @State private var outgoingTab: PodcastTab?
+    @State private var outgoingOffset: CGFloat = 0
+    @State private var contentWidth: CGFloat = 1
+    @Namespace private var underlineNS
 
     private var selected: PodcastTab {
         if let tab {
@@ -102,21 +109,22 @@ struct PodcastRootView: View {
                 .padding(.horizontal, 6)
             }
             .onChange(of: selected) { _, t in
-                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(t, anchor: .center) }
+                withAnimation(.easeOut(duration: TabSwipe.duration)) { proxy.scrollTo(t, anchor: .center) }
             }
         }
     }
 
     private func tabButton(_ name: String, count: Int, _ t: PodcastTab) -> some View {
         let on = selected == t
-        return Button { tab = t } label: {
+        return Button { switchTab(to: t) } label: {
             VStack(spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 2) {
                     Text(name).font(.footnote.weight(on ? .bold : .regular))
                     if count > 0 { Text("\(count)").font(.caption2) }
                 }
                 .foregroundStyle(on ? Theme.accent : Color.secondary)
-                Rectangle().fill(on ? Theme.accent : .clear).frame(height: 2)
+                TabUnderline(on: on, namespace: underlineNS)
+                    .animation(.easeOut(duration: TabSwipe.duration), value: selected)
             }
             .fixedSize()
             .padding(.horizontal, 10)
@@ -144,9 +152,98 @@ struct PodcastRootView: View {
 
     // MARK: - 中身
 
-    @ViewBuilder
+    /// いまのタブの中身（指に追従して横にずれる）と、切り替え中だけ端へ抜けていく元のタブの中身。
+    /// 中の一覧（新着・番組・キューの余白と見出し）が横スワイプを environment の tabSwipe で知らせてくる
     private var content: some View {
-        switch selected {
+        ZStack {
+            page(selected)
+                .id(selected)
+                .offset(x: liveOffset)
+            if let o = outgoingTab {
+                page(o)
+                    .id(o)
+                    .background(Color(uiColor: .systemBackground))
+                    .offset(x: outgoingOffset)
+                    .allowsHitTesting(false)
+                    .transition(.identity)
+            }
+        }
+        .background {
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { contentWidth = max(geo.size.width, 1) }
+                    .onChange(of: geo.size.width) { _, w in contentWidth = max(w, 1) }
+            }
+        }
+        .environment(\.tabSwipe, TabSwipeHandler(changed: swipeChanged, ended: swipeEnded))
+    }
+
+    // MARK: - 左右スワイプで隣のタブへ
+
+    /// 上のタブの並び（キュー → 新着 → 番組）。tabBar と同じ順
+    private var tabOrder: [PodcastTab] { store.queues.map { .queue($0.id) } + [.new, .shows] }
+
+    /// いまのタブの隣（delta = +1 で右隣・-1 で左隣）。端では nil
+    private func neighbor(_ delta: Int) -> PodcastTab? {
+        let order = tabOrder
+        guard let i = order.firstIndex(of: selected), order.indices.contains(i + delta) else { return nil }
+        return order[i + delta]
+    }
+
+    private func swipeChanged(_ t: CGSize) {
+        guard outgoingTab == nil, router.path.isEmpty else { return }
+        if let o = TabSwipe.followOffset(dx: t.width, dy: t.height, canMove: { neighbor($0) != nil }) {
+            liveOffset = o
+        }
+    }
+
+    private func swipeEnded(_ t: CGSize) {
+        guard outgoingTab == nil else { return }
+        let delta = TabSwipe.delta(dx: t.width)
+        if router.path.isEmpty, TabSwipe.shouldCommit(dx: t.width, dy: t.height), let next = neighbor(delta) {
+            commitSwitch(to: next, delta: delta)
+        } else if liveOffset != 0 {
+            withAnimation(.easeOut(duration: TabSwipe.duration)) { liveOffset = 0 }
+        }
+    }
+
+    /// タブを直接タップしたとき: 並びの向きに合わせて同じアニメで切り替える
+    private func switchTab(to t: PodcastTab) {
+        let order = tabOrder
+        guard outgoingTab == nil, let from = order.firstIndex(of: selected), let to = order.firstIndex(of: t), from != to else {
+            tab = t
+            return
+        }
+        commitSwitch(to: t, delta: to > from ? 1 : -1)
+    }
+
+    /// いまの中身を端へ抜けさせ、新しいタブの中身を反対側の端から 0 へ滑り込ませる（記事の commitSwipe と同じ演じ方）
+    private func commitSwitch(to t: PodcastTab, delta: Int) {
+        outgoingTab = selected
+        outgoingOffset = liveOffset
+        let width = contentWidth
+        let exitOffset: CGFloat = delta > 0 ? -width : width
+        let enterOffset: CGFloat = delta > 0 ? width : -width
+
+        var noAnimation = Transaction()
+        noAnimation.disablesAnimations = true
+        withTransaction(noAnimation) { liveOffset = enterOffset }
+
+        tab = t
+
+        withAnimation(.easeOut(duration: TabSwipe.duration)) {
+            liveOffset = 0
+            outgoingOffset = exitOffset
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + TabSwipe.duration) {
+            outgoingTab = nil
+            outgoingOffset = 0
+        }
+    }
+
+    @ViewBuilder
+    private func page(_ t: PodcastTab) -> some View {
+        switch t {
         case .queue(let id):
             if let q = store.state.book.queue(id) {
                 QueueListView(queue: q, onRename: { nameEditor = QueueNameEditor(target: q.id, name: q.name) })
@@ -223,8 +320,10 @@ struct QueueListView: View {
                 }
                 .listStyle(.plain)
                 .refreshable { await store.refresh() }
+                .tabSwipeGesture()
             } else {
-                // 右端の取っ手（≡）をつかんでドラッグで並べ替え（編集モードなし）・左スワイプで外す・右スワイプで移す
+                // 右端の取っ手（≡）をつかんでドラッグで並べ替え（編集モードなし）・左スワイプで外す・右スワイプで移す。
+                // 行の上の横スワイプは行の操作が優先・行の無い余白の横スワイプで隣のタブへ（QueueCollectionView の中で振り分け）
                 QueueCollectionView(queue: queue, onMoveRequest: { moving = $0 })
             }
             if let e = store.errorMessage {
@@ -255,6 +354,9 @@ struct QueueListView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
+        // 見出しの帯の上の横スワイプでも隣のタブへ（行で埋まっているときの逃げ道）
+        .contentShape(Rectangle())
+        .tabSwipeGesture()
     }
 }
 
@@ -285,6 +387,8 @@ struct NewEpisodesView: View {
         }
         .listStyle(.plain)
         .refreshable { await store.refresh() }
+        // 行にスワイプ操作が無いので、一覧のどこでも左右スワイプで隣のタブへ
+        .tabSwipeGesture()
     }
 }
 
