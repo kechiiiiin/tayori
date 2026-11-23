@@ -91,7 +91,11 @@ struct ShowDetailView: View {
             Section {
                 ForEach(episodes) { e in
                     EpisodeRow(episode: e, inQueue: nil, showArtwork: false)
-                        .onAppear { if e.id == episodes.last?.id { Task { await loadMore() } } }
+                        .onAppear { if EpisodePaging.nearEnd(e.id, in: episodes) { Task { await loadMore() } } }
+                }
+                if next != nil {
+                    ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden)
+                        .onAppear { Task { await loadMore() } }
                 }
                 if episodes.isEmpty && !loading {
                     Text("回はまだありません（取得を待っています）").font(.footnote).foregroundStyle(.secondary)
@@ -151,7 +155,7 @@ struct ShowDetailView: View {
         loading = true
         defer { loading = false }
         do {
-            let p = try await TayoriAPI.shared.episodes(podcast: podcast.id)
+            let p = try await TayoriAPI.shared.episodes(podcast: podcast.id, limit: EpisodePaging.pageSize)
             episodes = p.episodes
             next = p.next
             error = nil
@@ -165,7 +169,7 @@ struct ShowDetailView: View {
         loading = true
         defer { loading = false }
         do {
-            let p = try await TayoriAPI.shared.episodes(podcast: podcast.id, before: cursor)
+            let p = try await TayoriAPI.shared.episodes(podcast: podcast.id, before: cursor, limit: EpisodePaging.pageSize)
             let known = Set(episodes.map(\.id))
             episodes += p.episodes.filter { !known.contains($0.id) }
             next = p.next

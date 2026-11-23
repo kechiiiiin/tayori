@@ -109,6 +109,30 @@ final class PodcastUITests: XCTestCase {
     }
 
     /// いま見えているキューで「ダウンロード済み」の印が n 個そろうまで待つ
+    /// 番組のエピソード一覧の無限スクロール: 初めは 30 件だけ読み、下へスクロールすると次のページ（31 件目以降）が読まれる。
+    /// 先に ../worker で npm run seed:long（345 回の「長寿番組（試験）」）
+    func testShowEpisodesLoadNextPageOnScroll() throws {
+        launch(["-tayoriPodcastShow", "長寿番組（試験）"])
+        let first = app.staticTexts["長寿 第345回"].firstMatch
+        guard first.waitForExistence(timeout: 15) else {
+            throw XCTSkip("長寿番組（試験）が無い（../worker で npm run seed:long）")
+        }
+        attach("long-show-top")
+        // 1ページ目（345〜316）の外の回は、まだ読んでいない
+        XCTAssertFalse(app.staticTexts["長寿 第315回"].exists, "初めから31件目以降を読んでいる")
+        let list = app.collectionViews.firstMatch
+        for target in ["長寿 第315回", "長寿 第280回", "長寿 第250回"] {
+            let e = app.staticTexts[target].firstMatch
+            var n = 0
+            while !(e.exists && e.isHittable) && n < 40 {
+                list.swipeUp(velocity: .fast)
+                n += 1
+            }
+            XCTAssertTrue(e.exists, "\(target) が読まれない（次のページが来ない）")
+        }
+        attach("long-show-scrolled")
+    }
+
     private func waitForDownloads(_ n: Int, timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {

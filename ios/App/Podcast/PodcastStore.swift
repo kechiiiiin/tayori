@@ -35,6 +35,7 @@ final class PodcastStore {
     var podcasts: [Podcast] = []
     var newEpisodes: [Episode] = []
     var newNext: String?
+    private var isLoadingMoreNew = false
     var errorMessage: String?
     var isLoading = false
 
@@ -206,7 +207,7 @@ final class PodcastStore {
         defer { isLoading = false }
         do {
             async let pods = api.podcasts()
-            async let page = api.episodes(limit: 50)
+            async let page = api.episodes(limit: EpisodePaging.pageSize)
             let (p, n) = try await (pods, page)
             podcasts = p
             newEpisodes = n.episodes
@@ -220,9 +221,11 @@ final class PodcastStore {
     }
 
     func loadMoreNew() async {
-        guard let cursor = newNext else { return }
+        guard let cursor = newNext, !isLoadingMoreNew else { return }
+        isLoadingMoreNew = true
+        defer { isLoadingMoreNew = false }
         do {
-            let p = try await api.episodes(before: cursor)
+            let p = try await api.episodes(before: cursor, limit: EpisodePaging.pageSize)
             let known = Set(newEpisodes.map(\.id))
             newEpisodes += p.episodes.filter { !known.contains($0.id) }
             newNext = p.next

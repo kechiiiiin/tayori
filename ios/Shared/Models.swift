@@ -257,6 +257,18 @@ struct EpisodePage: Codable, Sendable {
     let next: String?
 }
 
+/// エピソード一覧の無限スクロール: 1ページ pageSize 件ずつ読み、下から prefetch 件目が見えたら次を読む
+enum EpisodePaging {
+    static let pageSize = 30
+    static let prefetch = 5
+
+    /// id の行が一覧の末尾から prefetch 件以内か（そこが見えたら次のページを読む）
+    static func nearEnd(_ id: Int, in list: [Episode]) -> Bool {
+        guard let i = list.lastIndex(where: { $0.id == id }) else { return false }
+        return i >= list.count - prefetch
+    }
+}
+
 /// iTunes Search API（番組を名前で探す）の1件
 struct PodcastSearchResult: Codable, Identifiable, Hashable, Sendable {
     let collectionId: Int

@@ -264,7 +264,11 @@ struct NewEpisodesView: View {
         List {
             ForEach(store.newEpisodes) { e in
                 EpisodeRow(episode: e, inQueue: nil)
-                    .onAppear { if e.id == store.newEpisodes.last?.id { Task { await store.loadMoreNew() } } }
+                    .onAppear { if EpisodePaging.nearEnd(e.id, in: store.newEpisodes) { Task { await store.loadMoreNew() } } }
+            }
+            if store.newNext != nil {
+                ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden)
+                    .onAppear { Task { await store.loadMoreNew() } }
             }
             if store.newEpisodes.isEmpty && !store.isLoading {
                 Text(store.podcasts.isEmpty ? "番組がありません。右上の ＋ から足せます" : "回はまだありません")

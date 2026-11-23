@@ -160,4 +160,16 @@ final class QueueBookTests: XCTestCase {
         XCTAssertEqual(Duration.label(2550), "43分")
         XCTAssertEqual(Duration.label(nil), "")
     }
+
+    /// 無限スクロール: 末尾から5件以内の行が見えたら次のページ（2026-11-24）
+    func testEpisodePagingNearEnd() {
+        let list = (1...30).map { ep($0) }
+        XCTAssertFalse(EpisodePaging.nearEnd(1, in: list))
+        XCTAssertFalse(EpisodePaging.nearEnd(25, in: list))
+        XCTAssertTrue(EpisodePaging.nearEnd(26, in: list))
+        XCTAssertTrue(EpisodePaging.nearEnd(30, in: list))
+        XCTAssertFalse(EpisodePaging.nearEnd(99, in: list))
+        XCTAssertTrue(EpisodePaging.nearEnd(1, in: [ep(1)]))
+        XCTAssertEqual(EpisodePaging.pageSize, 30)
+    }
 }
