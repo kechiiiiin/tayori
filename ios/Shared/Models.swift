@@ -108,6 +108,12 @@ struct Feed: Codable, Identifiable, Hashable, Sendable {
     var initial: String {
         String(title.trimmingCharacters(in: .whitespaces).first ?? "・").uppercased()
     }
+
+    /// ファビコンの URL（Google の s2/favicons を経由。ホストが取れなければ nil）
+    var faviconURL: URL? {
+        guard let host = URL(string: siteUrl ?? feedUrl)?.host else { return nil }
+        return URL(string: "https://www.google.com/s2/favicons?domain=\(host)&sz=64")
+    }
 }
 
 struct FeedList: Codable, Sendable {

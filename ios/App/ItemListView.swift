@@ -68,10 +68,17 @@ struct ItemListView: View {
 
     // MARK: - 行
 
+    /// feedId → favicon URL（毎行 O(n) 探索しないよう先に辞書化）
+    private var favicons: [Int: URL] {
+        model.feeds.reduce(into: [:]) { dict, f in dict[f.id] = f.faviconURL }
+    }
+
+    @ViewBuilder
     private var list: some View {
+        let favicons = self.favicons
         List {
             ForEach(model.items) { item in
-                ItemRow(item: item, state: model.state, opened: model.lastOpened?.id == item.id)
+                ItemRow(item: item, state: model.state, opened: model.lastOpened?.id == item.id, favicon: favicons[item.feedId])
                     .contentShape(Rectangle())
                     .onTapGesture { model.open(item) }
                     .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
@@ -181,6 +188,8 @@ struct ItemRow: View {
     let item: Item
     let state: ItemState
     let opened: Bool
+    /// サイトのファビコン（model.feeds から feedId で引いたもの。取れないサイトは nil）
+    let favicon: URL?
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -194,7 +203,11 @@ struct ItemRow: View {
                     .font(.subheadline.weight(item.isRead ? .regular : .semibold))
                     .foregroundStyle(item.isRead ? Color.secondary : Color.primary)
                     .lineSpacing(2)
-                Text(meta).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    FaviconView(url: favicon, fallback: item.feedTitle.first.map(String.init) ?? "・", size: 14)
+                        .alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 1 }
+                    Text(meta).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
                 if let c = item.comment {
                     Label {
                         Text(c)
