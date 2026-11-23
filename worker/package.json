@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "wrangler d1 migrations apply tayori --local && wrangler dev --local --ip 127.0.0.1 --port 8792 --local-upstream 127.0.0.1:8792 --define __LOCAL_DEV__:true",
     "seed": "wrangler d1 execute tayori --local --file seed/demo.sql",
+    "seed:long": "wrangler d1 execute tayori --local --file seed/long-show.sql",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
     "check": "npm run typecheck && npm test"

@@ -29,7 +29,7 @@ docs/screenshots/  シミュレータの実画面
 | 90 日 | 既読から 90 日たち、コメントの無い記事を cron で消す。guid は控えに残すので、フィードにまだ載っていても未読で戻らない |
 | 取得エラー | `feeds.last_error` に残し、アプリのサイト一覧に「取得できません」 |
 | 認証 | Cloudflare Access のサービストークン（アーカイブに埋め込み・Keychain の値があればそちら優先）。Worker は関所（sekisho）の `verify(token, aud, { allowServiceTokens: true })` で確かめ、Client ID を `ACCESS_SERVICE_CLIENT_IDS` と照合（無し・不正は 401、許可外は 403） |
-| ポッドキャスト（段階3） | `feeds.kind`（`article`／`podcast`）。番組の回は `items` に `enclosure_url`・`enclosure_type`・`duration_sec` つきで入る。**記事一覧・カテゴリの数・`GET /api/feeds`（既定）には出ない**。初回 20 件・控え・既読 90 日の対象外で、番組ごとに新しい順 **300 回**まで持つ（取得のたびに古い回から消す・コメントのある回は残す）。キュー・再生位置・自動追加・ダウンロードは iPhone の中（Worker と同期しない） |
+| ポッドキャスト（段階3） | `feeds.kind`（`article`／`podcast`）。番組の回は記事とは別の表 **`episodes`**（`enclosure_url`・`enclosure_type`・`duration_sec`・重複は `(feed_id, guid)`）。既読・コメント・控え・初回 20 件・既読 90 日の対象外で、**上限なしにフィードにある回を全部持ち、フィードから消えた回も消さない**。取得では新しい回だけ INSERT する（既知の回は音声・長さ・題名・URL が変わったときだけ UPDATE）。番組の回は記事一覧・カテゴリの数・`GET /api/feeds`（既定）には出ない。キュー・再生位置・自動追加・ダウンロードは iPhone の中（Worker と同期しない） |
 | 段階2 | `feeds.rururu_paw` と `paw_queue` は作ってあるだけ（rururu の書き込み API 待ち） |
 
 ### API
@@ -52,7 +52,7 @@ docs/screenshots/  シミュレータの実画面
 | GET | `/api/podcasts` | 番組の一覧（段階3）→ `{ podcasts: [{ id, title, site_url, feed_url, image_url, last_fetched_at, last_error, episodes, latest_episode_id, latest_at }] }` |
 | POST | `/api/podcasts` | `{ url }`（フィードの URL か番組のサイト）→ 201 `{ podcast, created: true }`／購読済みは 200。記事として購読済みなら番組へ移して取り直す（`converted: true`） |
 | GET / DELETE | `/api/podcasts/:id` | 1番組／外す（回も消える） |
-| GET | `/api/podcasts/:id/episodes` | その番組の回（新しい順）。`before`・`limit`・`after_id`（その id より後を昇順で）→ `{ episodes, next }` |
+| GET | `/api/podcasts/:id/episodes` | その番組の回（新しい順・既定 30 件・`limit` は 200 まで）。`before=<next>` で続き・`after_id`（その id より後を昇順で）→ `{ episodes, next }` |
 | GET | `/api/episodes` | 全番組の新着（新しい順）。クエリは同じ |
 
 ### 「ポッドキャスト」カテゴリを番組へ移す（段階3・一度だけ）
@@ -60,6 +60,14 @@ docs/screenshots/  シミュレータの実画面
 `migrations/0005_move_podcast_category.sql` は、カテゴリ「ポッドキャスト」のサイトを `kind = podcast` に移してカテゴリを消す。
 `wrangler d1 migrations apply tayori --remote` で 0004 と一緒に流れるので、**本番へ流す前に中身と対象（カテゴリ名「ポッドキャスト」のサイト）を確かめる**。
 移した番組は次の cron で最優先・条件なしで取り直され、回に音声の URL と長さが入る。
+
+### 番組の回を `episodes` へ分ける（2026-11-24・一度だけ）
+
+`migrations/0006_episodes.sql` は `episodes` を作り、`items` にある番組の回（音声のある回）を **id ごと**写して、コメントの無い回を `items` から消す（コメントのある回は `items` に残る・記事一覧には出ない）。
+回の id を引き継ぐので、iPhone の中のキュー・再生位置・ダウンロード・新着の目印はそのまま使える。これから入る回の id は `items` が配った id より大きくなる。
+番組の ETag を消すので、次の取得で条件なしに全文を取り直し、300 回より前の過去回も入る。何度流しても同じ結果になる。
+
+ローカルで無限スクロールを試す: `npm run seed` のあと `npm run seed:long`（345 回の「長寿番組（試験）」）。
 
 ## ポッドキャスト（段階3・iPhone）
 
@@ -71,6 +79,7 @@ docs/screenshots/  シミュレータの実画面
 - キューにある回は自動でダウンロード（バックグラウンドの URLSession・既定は Wi-Fi のときだけ・＋ のメニューで「モバイル通信でもダウンロード」）。落としてあれば端末内のファイルで再生、聴き終えた・キューから外した回のファイルは消す
 - 速度 0.5〜3.0 倍（0.1 刻み・全体で1つ）・15秒戻し／30秒送り・バックグラウンド再生・ロック画面とコントロールセンター・続きから再開。タブバーの上に小さなプレーヤー、押すと全画面
 - キュー・再生位置・自動追加の設定・ダウンロードは端末の中（`Application Support/podcast-state.json`・`Episodes/`）。Worker とは同期しない
+- 番組の回の一覧と新着は 30 件ずつ読み、下から 5 件目が見えたら次を読む（無限スクロール）
 - 番組の追加は名前で探す（iTunes Search API・アプリから直接）か、フィードの URL
 
 ## 開発

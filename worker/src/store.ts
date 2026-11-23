@@ -78,7 +78,7 @@ export async function listCategories(db: D1Database) {
                 COALESCE(SUM(CASE WHEN i.id IS NOT NULL AND i.read_at IS NULL THEN 1 ELSE 0 END), 0) AS unread,
                 COALESCE(SUM(CASE WHEN i.comment IS NOT NULL THEN 1 ELSE 0 END), 0) AS commented
            FROM categories c
-           LEFT JOIN feeds f ON f.category_id = c.id AND f.kind = 'article'
+           LEFT JOIN feeds f ON f.category_id = c.id
            LEFT JOIN items i ON i.feed_id = f.id
           GROUP BY c.id
           ORDER BY c.sort, c.id`,
@@ -90,7 +90,7 @@ export async function listCategories(db: D1Database) {
       `SELECT COALESCE(SUM(CASE WHEN i.id IS NOT NULL AND i.read_at IS NULL THEN 1 ELSE 0 END), 0) AS unread,
               COALESCE(SUM(CASE WHEN i.comment IS NOT NULL THEN 1 ELSE 0 END), 0) AS commented
          FROM items i JOIN feeds f ON f.id = i.feed_id
-        WHERE f.category_id IS NULL AND f.kind = 'article'`,
+        WHERE f.category_id IS NULL AND f.kind = 'article'`, // 番組（カテゴリなし）の items に残ったコメントつきの回を数えない
     )
     .first<{ unread: number; commented: number }>();
   const uncategorized = { unread: Number(none?.unread ?? 0), commented: Number(none?.commented ?? 0) };
@@ -209,10 +209,11 @@ export async function setFeedCategory(db: D1Database, id: number, categoryId: nu
   return (r.meta?.changes ?? 0) > 0;
 }
 
-/** 外す。記事（コメントごと）・控え・paw_queue も消す */
+/** 外す。記事（コメントごと）・番組の回・控え・paw_queue も消す */
 export async function deleteFeed(db: D1Database, id: number): Promise<boolean> {
   if (!(await getFeedRow(db, id))) return false;
   await db.batch([
+    db.prepare("DELETE FROM episodes WHERE feed_id = ?").bind(id),
     db.prepare("DELETE FROM paw_queue WHERE item_id IN (SELECT id FROM items WHERE feed_id = ?)").bind(id),
     db.prepare("DELETE FROM items WHERE feed_id = ?").bind(id),
     db.prepare("DELETE FROM item_tombstones WHERE feed_id = ?").bind(id),
@@ -337,7 +338,7 @@ export async function listItems(
   db: D1Database,
   q: { state: ItemState; category?: number | "none"; feed?: number; before?: { sort_at: string; id: number }; limit?: number },
 ): Promise<{ items: ItemView[]; next: string | null }> {
-  // 記事一覧にはポッドキャストの番組の回を出さない
+  // 番組の回は episodes にある。items に残る番組の回（0006 の移行でコメントがあって残した回）は記事一覧に出さない
   const where: string[] = ["f.kind = 'article'"];
   const args: (string | number)[] = [];
   if (q.state === "unread") where.push("i.read_at IS NULL");
@@ -420,8 +421,8 @@ export async function setComment(db: D1Database, id: number, comment: string | n
 /** 既読になって PURGE_DAYS 日たち、コメントの無い記事を消す（guid は控えに残し、次の取得で戻らないように） */
 export async function purgeOld(db: D1Database, now: Date): Promise<number> {
   const cutoff = new Date(now.getTime() - PURGE_DAYS * 86400_000).toISOString();
-  // 番組の回は既読で消さない（番組ごとの上限で古い回から消す・podcast.ts の trimEpisodes）
-  const cond = "read_at IS NOT NULL AND read_at < ?1 AND comment IS NULL AND feed_id IN (SELECT id FROM feeds WHERE kind = 'article')";
+  // 番組の回は episodes にあり、ここでは消さない（items に残る番組の回はコメントつきなので対象外）
+  const cond = "read_at IS NOT NULL AND read_at < ?1 AND comment IS NULL";
   const out = await db.batch([
     db.prepare(`INSERT OR IGNORE INTO item_tombstones (feed_id, guid, created_at) SELECT feed_id, guid, ?2 FROM items WHERE ${cond}`).bind(cutoff, now.toISOString()),
     db.prepare(`DELETE FROM paw_queue WHERE item_id IN (SELECT id FROM items WHERE ${cond})`).bind(cutoff),

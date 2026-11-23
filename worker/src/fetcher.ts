@@ -105,7 +105,7 @@ export async function refreshFeed(db: D1Database, feed: FeedRow, deps: FetchDeps
     if (!parsed) throw new FetchError("フィードとして読めません");
     const fetched = { etag: got.etag, last_modified: got.last_modified, site_url: parsed.site_url, image_url: parsed.image_url };
     if (feed.kind === "podcast") {
-      // 番組: 上限まで入れ、enclosure を埋め直す。プッシュは鳴らさない（「メイン」のカテゴリに入らない）
+      // 番組: 新しい回だけ episodes へ（上限なし・既知の回は書かない）。プッシュは鳴らさない（「メイン」のカテゴリに入らない）
       const added = await upsertEpisodes(db, feed.id, parsed.items, now);
       await markFetched(db, feed.id, fetched, now);
       return { status: "ok", added };
@@ -188,7 +188,7 @@ export type AddResult =
  * 2. HTML なら <link rel="alternate"> の候補を上から試す（最大3本）
  * 3. どれもだめなら feed_not_found
  * 足したら直近 INITIAL_ITEMS 件を未読で入れる。
- * kind = podcast（番組として足す）はカテゴリを持たず、新しい順に PODCAST_MAX_EPISODES 回まで入れる。
+ * kind = podcast（番組として足す）はカテゴリを持たず、フィードにある回を全部 episodes へ入れる。
  * 記事として購読済みのフィードを番組として足したら、番組へ移して取り直す
  */
 export async function addFeed(
