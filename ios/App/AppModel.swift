@@ -132,6 +132,20 @@ final class AppModel {
         select(category: order[j])
     }
 
+    /// shiftCategory(by:) が実際に動くか（端では false）。スワイプ中の見た目の判定に使う
+    func canShiftCategory(by delta: Int) -> Bool {
+        let order = categoryOrder
+        guard let i = order.firstIndex(of: category) else { return false }
+        return order.indices.contains(i + delta)
+    }
+
+    /// categoryOrder 上で c が category より右なら +1・左なら -1・同じ／不明なら 0（タブを直接タップしたときの向き判定に使う）
+    func direction(to c: CategoryFilter) -> Int {
+        let order = categoryOrder
+        guard let from = order.firstIndex(of: category), let to = order.firstIndex(of: c) else { return 0 }
+        return to == from ? 0 : (to > from ? 1 : -1)
+    }
+
     func select(feed f: Feed?) {
         feedFilter = f
         if f != nil { category = .all }

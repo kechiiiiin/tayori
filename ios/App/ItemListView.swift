@@ -8,6 +8,20 @@ struct ItemListView: View {
     /// iPhone はカテゴリの並びを上に出す（iPad はサイドバーにある）
     let showCategoryBar: Bool
 
+    /// いまの一覧（model.items と同じデータを映す本体）の横のずれ。ドラッグ追従と、切り替え確定後の「新しい方が端から入る」アニメに使う
+    @State private var liveOffset: CGFloat = 0
+    /// 切り替え確定の瞬間に凍結した「元の」一覧。これが端へ抜けるのを演じている間だけ存在する
+    @State private var outgoing: OutgoingSnapshot?
+    @State private var outgoingOffset: CGFloat = 0
+    @State private var listWidth: CGFloat = 1
+
+    private struct OutgoingSnapshot {
+        let items: [Item]
+        let favicons: [Int: URL]
+    }
+
+    private static let transitionDuration = 0.28
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -47,7 +61,7 @@ struct ItemListView: View {
             .padding(.horizontal, 16)
 
             if showCategoryBar && model.feedFilter == nil {
-                CategoryBar()
+                CategoryBar { category in switchCategory(to: category, delta: model.direction(to: category)) }
             }
             if let f = model.feedFilter {
                 HStack(spacing: 6) {
@@ -76,8 +90,53 @@ struct ItemListView: View {
 
     @ViewBuilder
     private var list: some View {
+        ZStack {
+            liveList
+                .offset(x: liveOffset)
+                .background {
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { listWidth = max(geo.size.width, 1) }
+                            .onChange(of: geo.size.width) { _, w in listWidth = max(w, 1) }
+                    }
+                }
+            if let outgoing {
+                staticRows(items: outgoing.items, favicons: outgoing.favicons)
+                    .offset(x: outgoingOffset)
+                    .allowsHitTesting(false)
+                    .transition(.identity)
+            }
+        }
+        // 一覧を左右にスワイプ → 隣のカテゴリへ（左へで右隣・右へで左隣・端で止まる）。
+        // 縦のスクロールを邪魔しないよう、横の動きが縦の倍以上・60pt 以上のときだけ確定。
+        // ドラッグ中は指に追従させ、端のカテゴリではゴムのように軽くしか動かない
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 24, coordinateSpace: .local)
+                .onChanged { v in
+                    guard showCategoryBar, model.feedFilter == nil, outgoing == nil else { return }
+                    let dx = v.translation.width, dy = v.translation.height
+                    guard abs(dx) > abs(dy) else { return }
+                    let delta = dx < 0 ? 1 : -1
+                    let damping: CGFloat = model.canShiftCategory(by: delta) ? 0.6 : 0.2
+                    liveOffset = dx * damping
+                }
+                .onEnded { v in
+                    guard showCategoryBar, model.feedFilter == nil, outgoing == nil else { return }
+                    let dx = v.translation.width, dy = v.translation.height
+                    let delta = dx < 0 ? 1 : -1
+                    if abs(dx) >= 60, abs(dx) > abs(dy) * 2, model.canShiftCategory(by: delta) {
+                        commitSwipe(delta: delta)
+                    } else {
+                        withAnimation(.easeOut(duration: Self.transitionDuration)) { liveOffset = 0 }
+                    }
+                }
+        )
+    }
+
+    /// 本体の一覧（タップ・コンテキストメニュー・無限スクロールなど、ふつうの操作ができる方）
+    private var liveList: some View {
         let favicons = self.favicons
-        List {
+        return List {
             ForEach(model.items) { item in
                 ItemRow(item: item, state: model.state, opened: model.lastOpened?.id == item.id, favicon: favicons[item.feedId])
                     .contentShape(Rectangle())
@@ -110,17 +169,65 @@ struct ItemListView: View {
         }
         .listStyle(.plain)
         .refreshable { await model.reload() }
-        // 一覧を左右にスワイプ → 隣のカテゴリへ（左へで右隣・右へで左隣・端で止まる）。
-        // 縦のスクロールを邪魔しないよう、横の動きが縦の倍以上・60pt 以上のときだけ
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 24, coordinateSpace: .local)
-                .onEnded { v in
-                    guard showCategoryBar, model.feedFilter == nil else { return }
-                    let dx = v.translation.width, dy = v.translation.height
-                    guard abs(dx) >= 60, abs(dx) > abs(dy) * 2 else { return }
-                    model.shiftCategory(by: dx < 0 ? 1 : -1)
+    }
+
+    /// 切り替え中だけ出す、元の一覧の見た目だけの写し（操作できない・スクロールもしない）
+    private func staticRows(items: [Item], favicons: [Int: URL]) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(items) { item in
+                    ItemRow(item: item, state: model.state, opened: false, favicon: favicons[item.feedId])
+                        .padding(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                    Divider().padding(.leading, 16)
                 }
-        )
+            }
+        }
+        .scrollDisabled(true)
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    /// カテゴリの切り替えを演じる: いまの一覧を凍結して端へ抜けさせ、本体は反対側の端から 0 へ滑り込ませる。
+    /// delta = +1 で右隣（新しいものは右から入る）・-1 で左隣
+    private func switchCategory(to category: CategoryFilter, delta: Int) {
+        guard delta != 0, model.feedFilter == nil else {
+            if delta == 0 { model.select(category: category) }
+            return
+        }
+        guard model.canShiftCategory(by: delta) else {
+            model.select(category: category)
+            return
+        }
+        commitSwipe(delta: delta, to: category)
+    }
+
+    /// delta の方向へ確定。to が nil ならスワイプで決まった隣のカテゴリ（model.shiftCategory）、
+    /// 指定があればタブを直接タップしたとき（その categoryへ）
+    private func commitSwipe(delta: Int, to category: CategoryFilter? = nil) {
+        outgoing = OutgoingSnapshot(items: model.items, favicons: favicons)
+        outgoingOffset = liveOffset
+        let width = listWidth
+        let exitOffset: CGFloat = delta > 0 ? -width : width
+        let enterOffset: CGFloat = delta > 0 ? width : -width
+
+        // 本体を反対側の端へ、アニメなしで一度だけ飛ばす（画面外なので見えない）
+        var noAnimation = Transaction()
+        noAnimation.disablesAnimations = true
+        withTransaction(noAnimation) { liveOffset = enterOffset }
+
+        if let category {
+            model.select(category: category)
+        } else {
+            model.shiftCategory(by: delta)
+        }
+
+        withAnimation(.easeOut(duration: Self.transitionDuration)) {
+            liveOffset = 0
+            outgoingOffset = exitOffset
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.transitionDuration) {
+            outgoing = nil
+            outgoingOffset = 0
+        }
     }
 
     /// 一覧からコメントを書く。戻りのバー（lastOpened）は触らない
@@ -142,9 +249,13 @@ struct ItemListView: View {
     }
 }
 
-/// カテゴリの並び（横にスクロール・選んだものに下線・数字はいまのタブの数）
+/// カテゴリの並び（横にスクロール・選んだものに下線・数字はいまのタブの数）。
+/// 下線は matchedGeometryEffect で前のタブから滑って動く
 struct CategoryBar: View {
     @Environment(AppModel.self) private var model
+    /// タブを選んだときの通知先（ItemListView が一覧の向きつきアニメと揃えて model.select を呼ぶ）
+    var onSelect: (CategoryFilter) -> Void
+    @Namespace private var underlineNS
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -160,7 +271,7 @@ struct CategoryBar: View {
             }
             // スワイプで切り替えたとき、選んだタブが見えるところまで寄せる
             .onChange(of: model.category) { _, f in
-                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(f, anchor: .center) }
+                withAnimation(.easeOut(duration: 0.28)) { proxy.scrollTo(f, anchor: .center) }
             }
         }
     }
@@ -168,14 +279,21 @@ struct CategoryBar: View {
     /// 押せる範囲は文字より広く（左右 10pt・上 12pt・高さ 44pt 以上）。見た目の間隔は前と同じ 20pt ほど
     private func tab(_ name: String, _ n: Int, _ f: CategoryFilter) -> some View {
         let on = model.category == f
-        return Button { model.select(category: f) } label: {
+        return Button { onSelect(f) } label: {
             VStack(spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 2) {
                     Text(name).font(.footnote.weight(on ? .bold : .regular))
                     if n > 0 { Text("\(n)").font(.caption2) }
                 }
                 .foregroundStyle(on ? Theme.accent : Color.secondary)
-                Rectangle().fill(on ? Theme.accent : .clear).frame(height: 2)
+                ZStack {
+                    Color.clear.frame(height: 2)
+                    if on {
+                        Rectangle().fill(Theme.accent).frame(height: 2)
+                            .matchedGeometryEffect(id: "underline", in: underlineNS)
+                    }
+                }
+                .animation(.easeOut(duration: 0.28), value: model.category)
             }
             .fixedSize()
             .padding(.horizontal, 10)
