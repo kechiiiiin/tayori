@@ -25,6 +25,8 @@ export interface FeedView {
   title: string;
   site_url: string | null;
   feed_url: string;
+  /** ポッドキャストの番組アートワーク（itunes:image）。無ければ null */
+  image_url: string | null;
   last_fetched_at: string | null;
   last_error: string | null;
   unread: number;
@@ -51,6 +53,7 @@ export interface FeedRow {
   title: string;
   site_url: string | null;
   feed_url: string;
+  image_url: string | null;
   etag: string | null;
   last_modified: string | null;
   last_fetched_at: string | null;
@@ -138,7 +141,7 @@ export async function deleteCategory(db: D1Database, id: number): Promise<boolea
 
 // ---------------- フィード ----------------
 
-const FEED_VIEW = `SELECT f.id, f.category_id, f.title, f.site_url, f.feed_url, f.last_fetched_at, f.last_error, f.created_at,
+const FEED_VIEW = `SELECT f.id, f.category_id, f.title, f.site_url, f.feed_url, f.image_url, f.last_fetched_at, f.last_error, f.created_at,
        (SELECT COUNT(*) FROM items i WHERE i.feed_id = f.id AND i.read_at IS NULL) AS unread
   FROM feeds f`;
 
@@ -167,16 +170,24 @@ export async function findFeedByUrl(db: D1Database, feedUrl: string): Promise<nu
 
 export async function insertFeed(
   db: D1Database,
-  f: { category_id: number | null; title: string; site_url: string | null; feed_url: string; etag: string | null; last_modified: string | null },
+  f: {
+    category_id: number | null;
+    title: string;
+    site_url: string | null;
+    feed_url: string;
+    image_url: string | null;
+    etag: string | null;
+    last_modified: string | null;
+  },
   now: Date,
 ): Promise<number> {
   const at = now.toISOString();
   const r = await db
     .prepare(
-      `INSERT INTO feeds (category_id, title, site_url, feed_url, etag, last_modified, last_fetched_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      `INSERT INTO feeds (category_id, title, site_url, feed_url, image_url, etag, last_modified, last_fetched_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     )
-    .bind(f.category_id, f.title, f.site_url, f.feed_url, f.etag, f.last_modified, at, at)
+    .bind(f.category_id, f.title, f.site_url, f.feed_url, f.image_url, f.etag, f.last_modified, at, at)
     .first<{ id: number }>();
   return Number(r!.id);
 }
@@ -198,11 +209,14 @@ export async function deleteFeed(db: D1Database, id: number): Promise<boolean> {
   return true;
 }
 
-/** 取得の結果を残す（成功・304 は last_error を消す） */
+/**
+ * 取得の結果を残す（成功・304 は last_error を消す）。
+ * image_url は本文を読めたときだけ渡す（その時点のアートワークで上書き・無くなれば null）。304・失敗では触らない
+ */
 export async function markFetched(
   db: D1Database,
   id: number,
-  r: { etag?: string | null; last_modified?: string | null; error?: string | null; site_url?: string | null },
+  r: { etag?: string | null; last_modified?: string | null; error?: string | null; site_url?: string | null; image_url?: string | null },
   now: Date,
 ) {
   if (r.error) {
@@ -217,6 +231,9 @@ export async function markFetched(
     )
     .bind(now.toISOString(), r.etag ?? null, r.last_modified ?? null, r.site_url ?? null, id)
     .run();
+  if (r.image_url !== undefined) {
+    await db.prepare("UPDATE feeds SET image_url = ? WHERE id = ?").bind(r.image_url, id).run();
+  }
 }
 
 /** 取りに行く順（古い順・まだ一度も取っていないものが先） */

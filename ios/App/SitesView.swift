@@ -196,7 +196,7 @@ struct FeedRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            FaviconView(url: feed.faviconURL, fallback: feed.initial, size: 28)
+            FaviconView(url: feed.iconURL, fallback: feed.initial, size: 28)
             VStack(alignment: .leading, spacing: 1) {
                 Text(feed.title).font(.subheadline).lineLimit(1)
                 Text(feed.displayURL).font(.caption2).foregroundStyle(.secondary).lineLimit(1)

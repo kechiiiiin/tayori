@@ -54,6 +54,17 @@ final class TayoriUITests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
     }
 
+    /// サイト一覧の下のほう（seed のポッドキャストのアートワーク）を撮る。見るのは人の目
+    func testSitesShowsPodcastArtwork() throws {
+        XCTAssertTrue(app.cells.firstMatch.waitForExistence(timeout: 10))
+        app.buttons["サイト"].firstMatch.tap()
+        let podcast = app.staticTexts["いつまじラジオ"].firstMatch
+        for _ in 0..<5 where !podcast.isHittable { app.swipeUp() }
+        sleep(3) // アートワークの読み込み
+        XCTAssertTrue(podcast.isHittable)
+        attach("sites-artwork")
+    }
+
     private var returnBar: XCUIElement {
         app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'さっき開いた'")).firstMatch
     }

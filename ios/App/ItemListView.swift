@@ -69,9 +69,9 @@ struct ItemListView: View {
 
     // MARK: - 行
 
-    /// feedId → favicon URL（毎行 O(n) 探索しないよう先に辞書化）
+    /// feedId → アイコンの URL（アートワーク優先・毎行 O(n) 探索しないよう先に辞書化）
     private var favicons: [Int: URL] {
-        model.feeds.reduce(into: [:]) { dict, f in dict[f.id] = f.faviconURL }
+        model.feeds.reduce(into: [:]) { dict, f in dict[f.id] = f.iconURL }
     }
 
     @ViewBuilder

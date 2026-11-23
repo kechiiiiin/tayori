@@ -15,6 +15,8 @@ export interface ParsedFeed {
   kind: "rss" | "rdf" | "atom" | "json";
   title: string;
   site_url: string | null;
+  /** ポッドキャストの番組アートワーク（RSS のチャンネルの itunes:image@href）。無ければ null */
+  image_url: string | null;
   items: ParsedItem[];
 }
 
@@ -120,6 +122,19 @@ function atomLink(links: Node, base: string): string | null {
   return fallback;
 }
 
+/** チャンネルの <itunes:image href="..."/>（ポッドキャストの番組アートワーク）。ブログの <image> は見ない */
+function itunesImage(channel: Record<string, unknown>, base: string): string | null {
+  const v = channel["itunes:image"];
+  for (const o of Array.isArray(v) ? v : [v]) {
+    if (o && typeof o === "object") {
+      const href = (o as Record<string, unknown>)["@_href"];
+      const u = absUrl(typeof href === "string" ? href : null, base);
+      if (u) return u;
+    }
+  }
+  return null;
+}
+
 function parseRss(channel: Record<string, unknown>, items: Node[], base: string, kind: "rss" | "rdf"): ParsedFeed {
   const out: ParsedItem[] = [];
   for (const raw of items) {
@@ -134,6 +149,7 @@ function parseRss(channel: Record<string, unknown>, items: Node[], base: string,
     kind,
     title: cleanTitle(text(channel["title"])),
     site_url: atomLink(channel["link"], base),
+    image_url: itunesImage(channel, base),
     items: out,
   };
 }
@@ -148,7 +164,7 @@ function parseAtom(feed: Record<string, unknown>, base: string): ParsedFeed {
     const it = item(text(e["id"]), link, text(e["title"]), text(e["published"]) || text(e["updated"]));
     if (it) out.push(it);
   }
-  return { kind: "atom", title: cleanTitle(text(feed["title"])), site_url: atomLink(feed["link"], base), items: out };
+  return { kind: "atom", title: cleanTitle(text(feed["title"])), site_url: atomLink(feed["link"], base), image_url: null, items: out };
 }
 
 function parseJsonFeed(body: string, base: string): ParsedFeed | null {
@@ -177,6 +193,7 @@ function parseJsonFeed(body: string, base: string): ParsedFeed | null {
     kind: "json",
     title: cleanTitle(typeof f.title === "string" ? f.title : ""),
     site_url: absUrl(typeof f.home_page_url === "string" ? f.home_page_url : null, base),
+    image_url: null,
     items: out,
   };
 }

@@ -1,6 +1,6 @@
 // テスト用: node:sqlite の上に D1 の必要な分だけの口を作る（prepare/bind/first/all/run/batch/exec）
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 type Val = string | number | null;
 
@@ -31,9 +31,15 @@ class Stmt {
   }
 }
 
-export function makeDb(
-  migrations: string[] = ["migrations/0001_init.sql"],
-) {
+/** migrations/ の SQL を番号順に全部 */
+function allMigrations(): string[] {
+  return readdirSync("migrations")
+    .filter((f) => f.endsWith(".sql"))
+    .sort()
+    .map((f) => `migrations/${f}`);
+}
+
+export function makeDb(migrations: string[] = allMigrations()) {
   const raw = new DatabaseSync(":memory:");
   raw.exec("PRAGMA foreign_keys = ON;");
   for (const m of migrations) raw.exec(readFileSync(m, "utf8"));

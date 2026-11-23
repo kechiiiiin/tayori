@@ -94,7 +94,7 @@ export async function refreshFeed(db: D1Database, feed: FeedRow, deps: FetchDeps
     const parsed = parseFeed(got.body, got.url);
     if (!parsed) throw new FetchError("フィードとして読めません");
     const added = await insertItems(db, feed.id, parsed.items, now, false);
-    await markFetched(db, feed.id, { etag: got.etag, last_modified: got.last_modified, site_url: parsed.site_url }, now);
+    await markFetched(db, feed.id, { etag: got.etag, last_modified: got.last_modified, site_url: parsed.site_url, image_url: parsed.image_url }, now);
     return { status: "ok", added };
   } catch (e) {
     const error = e instanceof FetchError ? e.message : "取得に失敗しました";
@@ -206,6 +206,7 @@ export async function addFeed(db: D1Database, rawUrl: string, categoryId: number
       title: parsed.title || new URL(siteUrl).hostname,
       site_url: siteUrl,
       feed_url: feedUrl,
+      image_url: parsed.image_url,
       etag: got.etag,
       last_modified: got.last_modified,
     },

@@ -24,6 +24,7 @@ test("サイトの URL → <link rel=alternate> を上から試し、読めた�
       title: "Zenn architecture",
       site_url: "https://zenn.example/topics/architecture",
       feed_url: "https://blog.example.jp/atom.xml",
+      image_url: null,
       last_fetched_at: "2026-11-18T03:00:00.000Z",
       last_error: null,
       unread: 2,

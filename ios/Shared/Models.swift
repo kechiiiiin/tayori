@@ -92,6 +92,8 @@ struct Feed: Codable, Identifiable, Hashable, Sendable {
     let title: String
     let siteUrl: String?
     let feedUrl: String
+    /// ポッドキャストの番組アートワーク（RSS の itunes:image）。無いフィード・古い Worker では nil
+    let imageUrl: String?
     let lastFetchedAt: String?
     let lastError: String?
     let unread: Int
@@ -107,6 +109,12 @@ struct Feed: Codable, Identifiable, Hashable, Sendable {
     /// 頭文字（アイコン代わり）
     var initial: String {
         String(title.trimmingCharacters(in: .whitespaces).first ?? "・").uppercased()
+    }
+
+    /// 行とサイト一覧に出すアイコン: 番組アートワークがあればそれ、無ければファビコン
+    var iconURL: URL? {
+        if let s = imageUrl, let u = URL(string: s), u.scheme == "https" || u.scheme == "http" { return u }
+        return faviconURL
     }
 
     /// ファビコンの URL（Google の s2/favicons を経由。ホストが取れなければ nil）
