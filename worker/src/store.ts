@@ -2,6 +2,12 @@
 import { newest, type ParsedItem } from "./parse.ts";
 
 export type ItemState = "unread" | "commented" | "all";
+/** article = 記事（今までどおり）／podcast = ポッドキャストの番組（記事一覧・カテゴリの数には出ない） */
+export type FeedKind = "article" | "podcast";
+
+export function isKind(v: unknown): v is FeedKind {
+  return v === "article" || v === "podcast";
+}
 
 /** 初めて足したフィードで未読として入れる件数 */
 export const INITIAL_ITEMS = 20;
@@ -21,6 +27,7 @@ export interface CategoryView {
 
 export interface FeedView {
   id: number;
+  kind: FeedKind;
   category_id: number | null;
   title: string;
   site_url: string | null;
@@ -49,6 +56,7 @@ export interface ItemView {
 
 export interface FeedRow {
   id: number;
+  kind: FeedKind;
   category_id: number | null;
   title: string;
   site_url: string | null;
@@ -70,7 +78,7 @@ export async function listCategories(db: D1Database) {
                 COALESCE(SUM(CASE WHEN i.id IS NOT NULL AND i.read_at IS NULL THEN 1 ELSE 0 END), 0) AS unread,
                 COALESCE(SUM(CASE WHEN i.comment IS NOT NULL THEN 1 ELSE 0 END), 0) AS commented
            FROM categories c
-           LEFT JOIN feeds f ON f.category_id = c.id
+           LEFT JOIN feeds f ON f.category_id = c.id AND f.kind = 'article'
            LEFT JOIN items i ON i.feed_id = f.id
           GROUP BY c.id
           ORDER BY c.sort, c.id`,
@@ -82,7 +90,7 @@ export async function listCategories(db: D1Database) {
       `SELECT COALESCE(SUM(CASE WHEN i.id IS NOT NULL AND i.read_at IS NULL THEN 1 ELSE 0 END), 0) AS unread,
               COALESCE(SUM(CASE WHEN i.comment IS NOT NULL THEN 1 ELSE 0 END), 0) AS commented
          FROM items i JOIN feeds f ON f.id = i.feed_id
-        WHERE f.category_id IS NULL`,
+        WHERE f.category_id IS NULL AND f.kind = 'article'`,
     )
     .first<{ unread: number; commented: number }>();
   const uncategorized = { unread: Number(none?.unread ?? 0), commented: Number(none?.commented ?? 0) };
@@ -141,7 +149,7 @@ export async function deleteCategory(db: D1Database, id: number): Promise<boolea
 
 // ---------------- フィード ----------------
 
-const FEED_VIEW = `SELECT f.id, f.category_id, f.title, f.site_url, f.feed_url, f.image_url, f.last_fetched_at, f.last_error, f.created_at,
+const FEED_VIEW = `SELECT f.id, f.kind, f.category_id, f.title, f.site_url, f.feed_url, f.image_url, f.last_fetched_at, f.last_error, f.created_at,
        (SELECT COUNT(*) FROM items i WHERE i.feed_id = f.id AND i.read_at IS NULL) AS unread
   FROM feeds f`;
 
@@ -149,8 +157,11 @@ function feedView(r: FeedView): FeedView {
   return { ...r, unread: Number(r.unread) };
 }
 
-export async function listFeeds(db: D1Database): Promise<FeedView[]> {
-  const rows = (await db.prepare(`${FEED_VIEW} ORDER BY f.title COLLATE NOCASE, f.id`).all<FeedView>()).results;
+/** kind を渡せばその種類だけ（GET /api/feeds の既定は article＝サイト画面に番組を出さない） */
+export async function listFeeds(db: D1Database, kind?: FeedKind): Promise<FeedView[]> {
+  const where = kind ? " WHERE f.kind = ?" : "";
+  const stmt = db.prepare(`${FEED_VIEW}${where} ORDER BY f.title COLLATE NOCASE, f.id`);
+  const rows = (await (kind ? stmt.bind(kind) : stmt).all<FeedView>()).results;
   return rows.map(feedView);
 }
 
@@ -171,6 +182,7 @@ export async function findFeedByUrl(db: D1Database, feedUrl: string): Promise<nu
 export async function insertFeed(
   db: D1Database,
   f: {
+    kind?: FeedKind;
     category_id: number | null;
     title: string;
     site_url: string | null;
@@ -184,10 +196,10 @@ export async function insertFeed(
   const at = now.toISOString();
   const r = await db
     .prepare(
-      `INSERT INTO feeds (category_id, title, site_url, feed_url, image_url, etag, last_modified, last_fetched_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      `INSERT INTO feeds (kind, category_id, title, site_url, feed_url, image_url, etag, last_modified, last_fetched_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     )
-    .bind(f.category_id, f.title, f.site_url, f.feed_url, f.image_url, f.etag, f.last_modified, at, at)
+    .bind(f.kind ?? "article", f.category_id, f.title, f.site_url, f.feed_url, f.image_url, f.etag, f.last_modified, at, at)
     .first<{ id: number }>();
   return Number(r!.id);
 }
@@ -278,13 +290,17 @@ export async function insertItems(db: D1Database, feedId: number, items: ParsedI
     title: i.title,
     published_at: i.published_at,
     sort_at: i.published_at && i.published_at <= at ? i.published_at : at,
+    enclosure_url: i.enclosure_url ?? null,
+    enclosure_type: i.enclosure_type ?? null,
+    duration_sec: i.duration_sec ?? null,
   }));
   const stmts = [
     db
       .prepare(
-        `INSERT OR IGNORE INTO items (feed_id, guid, url, title, published_at, fetched_at, sort_at)
+        `INSERT OR IGNORE INTO items (feed_id, guid, url, title, published_at, fetched_at, sort_at, enclosure_url, enclosure_type, duration_sec)
          SELECT ?1, json_extract(value, '$.guid'), json_extract(value, '$.url'), json_extract(value, '$.title'),
-                json_extract(value, '$.published_at'), ?2, json_extract(value, '$.sort_at')
+                json_extract(value, '$.published_at'), ?2, json_extract(value, '$.sort_at'),
+                json_extract(value, '$.enclosure_url'), json_extract(value, '$.enclosure_type'), json_extract(value, '$.duration_sec')
            FROM json_each(?3)`,
       )
       .bind(feedId, at, JSON.stringify(rows)),
@@ -321,7 +337,8 @@ export async function listItems(
   db: D1Database,
   q: { state: ItemState; category?: number | "none"; feed?: number; before?: { sort_at: string; id: number }; limit?: number },
 ): Promise<{ items: ItemView[]; next: string | null }> {
-  const where: string[] = [];
+  // 記事一覧にはポッドキャストの番組の回を出さない
+  const where: string[] = ["f.kind = 'article'"];
   const args: (string | number)[] = [];
   if (q.state === "unread") where.push("i.read_at IS NULL");
   if (q.state === "commented") where.push("i.comment IS NOT NULL");
@@ -339,7 +356,7 @@ export async function listItems(
     args.push(q.before.sort_at, q.before.sort_at, q.before.id);
   }
   const limit = Math.max(1, Math.min(q.limit ?? PAGE_SIZE, 200));
-  const sql = `${ITEM_VIEW}${where.length ? " WHERE " + where.join(" AND ") : ""} ORDER BY i.sort_at DESC, i.id DESC LIMIT ?`;
+  const sql = `${ITEM_VIEW} WHERE ${where.join(" AND ")} ORDER BY i.sort_at DESC, i.id DESC LIMIT ?`;
   const rows = (
     await db
       .prepare(sql)
@@ -403,7 +420,8 @@ export async function setComment(db: D1Database, id: number, comment: string | n
 /** 既読になって PURGE_DAYS 日たち、コメントの無い記事を消す（guid は控えに残し、次の取得で戻らないように） */
 export async function purgeOld(db: D1Database, now: Date): Promise<number> {
   const cutoff = new Date(now.getTime() - PURGE_DAYS * 86400_000).toISOString();
-  const cond = "read_at IS NOT NULL AND read_at < ?1 AND comment IS NULL";
+  // 番組の回は既読で消さない（番組ごとの上限で古い回から消す・podcast.ts の trimEpisodes）
+  const cond = "read_at IS NOT NULL AND read_at < ?1 AND comment IS NULL AND feed_id IN (SELECT id FROM feeds WHERE kind = 'article')";
   const out = await db.batch([
     db.prepare(`INSERT OR IGNORE INTO item_tombstones (feed_id, guid, created_at) SELECT feed_id, guid, ?2 FROM items WHERE ${cond}`).bind(cutoff, now.toISOString()),
     db.prepare(`DELETE FROM paw_queue WHERE item_id IN (SELECT id FROM items WHERE ${cond})`).bind(cutoff),

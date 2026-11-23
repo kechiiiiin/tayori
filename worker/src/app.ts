@@ -5,6 +5,7 @@ import { apnsConfig, httpApnsSender, type ApnsSender } from "./apns.ts";
 import { deleteDevice, normalizeEnvironment, normalizeToken, sendNotices, upsertDevice, type Notice } from "./notify.ts";
 import { requireAccess } from "./auth.ts";
 import { addFeed, normalizeUrl, refreshFeed, type FetchDeps } from "./fetcher.ts";
+import { getPodcast, listEpisodes, listPodcasts } from "./podcast.ts";
 import {
   categoryExists,
   createCategory,
@@ -14,6 +15,7 @@ import {
   getFeedRow,
   getFeedView,
   getItem,
+  isKind,
   isState,
   listCategories,
   listFeeds,
@@ -181,7 +183,12 @@ export function createApp(deps: AppDeps = defaultDeps) {
 
   // ---------------- フィード ----------------
 
-  app.get("/api/feeds", async (c) => c.json({ feeds: await listFeeds(c.env.DB) }));
+  /** kind=article（既定・サイト画面）｜podcast｜all */
+  app.get("/api/feeds", async (c) => {
+    const k = c.req.query("kind") ?? "article";
+    if (k !== "all" && !isKind(k)) return err(c, 400, "bad_kind");
+    return c.json({ feeds: await listFeeds(c.env.DB, k === "all" ? undefined : k) });
+  });
 
   app.post("/api/feeds", async (c) => {
     const b = await body(c);
@@ -200,6 +207,10 @@ export function createApp(deps: AppDeps = defaultDeps) {
     if (id === null) return err(c, 404, "not_found");
     const cat = await categoryArg(c, (await body(c)).category_id);
     if (cat === "bad" || cat === undefined) return err(c, 400, "bad_category");
+    const row = await getFeedRow(c.env.DB, id);
+    if (!row) return err(c, 404, "not_found");
+    // 番組はカテゴリを持たない
+    if (row.kind === "podcast" && cat !== null) return err(c, 400, "bad_kind");
     if (!(await setFeedCategory(c.env.DB, id, cat))) return err(c, 404, "not_found");
     return c.json({ feed: await getFeedView(c.env.DB, id) });
   });
@@ -223,6 +234,68 @@ export function createApp(deps: AppDeps = defaultDeps) {
       );
     }
     return c.json({ feed: await getFeedView(c.env.DB, row.id), result: r });
+  });
+
+  // ---------------- ポッドキャスト（段階3） ----------------
+
+  app.get("/api/podcasts", async (c) => c.json({ podcasts: await listPodcasts(c.env.DB) }));
+
+  /** 番組を足す: { url }（フィードの URL か番組のサイト）。記事として購読済みなら番組へ移す（converted: true） */
+  app.post("/api/podcasts", async (c) => {
+    const url = normalizeUrl((await body(c)).url);
+    if (!url) return err(c, 400, "bad_url");
+    const r = await addFeed(c.env.DB, url, null, deps, "podcast");
+    if (r.kind === "error") return err(c, 422, r.error, r.detail ? { detail: r.detail } : {});
+    const podcast = await getPodcast(c.env.DB, r.id);
+    if (!podcast) return err(c, 422, "not_podcast"); // 記事として購読済み、かつ移せなかった（来ない想定）
+    return c.json({ podcast, created: r.kind === "created", converted: r.kind === "converted" }, r.kind === "created" ? 201 : 200);
+  });
+
+  app.get("/api/podcasts/:id", async (c) => {
+    const id = parseId(c.req.param("id"));
+    const podcast = id === null ? null : await getPodcast(c.env.DB, id);
+    return podcast ? c.json({ podcast }) : err(c, 404, "not_found");
+  });
+
+  app.delete("/api/podcasts/:id", async (c) => {
+    const id = parseId(c.req.param("id"));
+    const row = id === null ? null : await getFeedRow(c.env.DB, id);
+    if (!row || row.kind !== "podcast") return err(c, 404, "not_found");
+    await deleteFeed(c.env.DB, row.id);
+    return c.json({ ok: true });
+  });
+
+  /** エピソード一覧の問い合わせ（before=続き・after_id=その id より後を昇順で・limit） */
+  function episodeQuery(c: C): { before?: { sort_at: string; id: number }; afterId?: number; limit?: number } | "bad_cursor" | "bad_after_id" {
+    const beforeQ = c.req.query("before");
+    const before = beforeQ ? decodeCursor(beforeQ) : undefined;
+    if (before === null) return "bad_cursor";
+    const afterQ = c.req.query("after_id");
+    let afterId: number | undefined;
+    if (afterQ !== undefined && afterQ !== "") {
+      if (!/^\d{1,15}$/.test(afterQ)) return "bad_after_id";
+      afterId = Number(afterQ);
+    }
+    const limitQ = c.req.query("limit");
+    const limit = limitQ ? parseId(limitQ) ?? undefined : undefined;
+    return { before, afterId, limit };
+  }
+
+  /** 番組ごとのエピソード一覧（新しい順） */
+  app.get("/api/podcasts/:id/episodes", async (c) => {
+    const id = parseId(c.req.param("id"));
+    const row = id === null ? null : await getFeedRow(c.env.DB, id);
+    if (!row || row.kind !== "podcast") return err(c, 404, "not_found");
+    const q = episodeQuery(c);
+    if (typeof q === "string") return err(c, 400, q);
+    return c.json(await listEpisodes(c.env.DB, { ...q, feed: row.id }));
+  });
+
+  /** 全番組の新着（新しい順）。after_id で「まだ見ていない回」 */
+  app.get("/api/episodes", async (c) => {
+    const q = episodeQuery(c);
+    if (typeof q === "string") return err(c, 400, q);
+    return c.json(await listEpisodes(c.env.DB, q));
   });
 
   // ---------------- プッシュ通知の端末 ----------------

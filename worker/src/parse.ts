@@ -9,6 +9,11 @@ export interface ParsedItem {
   title: string;
   /** ISO 8601（UTC）。読めなければ null */
   published_at: string | null;
+  /** 音声などの添付（RSS の <enclosure>・Atom の rel=enclosure・JSON Feed の attachments）。無ければ null */
+  enclosure_url?: string | null;
+  enclosure_type?: string | null;
+  /** 長さ（秒・itunes:duration か JSON Feed の duration_in_seconds）。無ければ null */
+  duration_sec?: number | null;
 }
 
 export interface ParsedFeed {
@@ -28,7 +33,7 @@ const parser = new XMLParser({
   trimValues: true,
   processEntities: true,
   htmlEntities: true,
-  isArray: (name) => ["item", "entry", "link", "category"].includes(name),
+  isArray: (name) => ["item", "entry", "link", "category", "enclosure"].includes(name),
 });
 
 type Node = unknown;
@@ -96,11 +101,66 @@ export function toIso(s: string): string | null {
   return null;
 }
 
-function item(guid: string, url: string | null, title: string, published: string): ParsedItem | null {
+interface Enclosure {
+  enclosure_url: string | null;
+  enclosure_type: string | null;
+  duration_sec: number | null;
+}
+const NO_ENCLOSURE: Enclosure = { enclosure_url: null, enclosure_type: null, duration_sec: null };
+
+function item(guid: string, url: string | null, title: string, published: string, enc: Enclosure = NO_ENCLOSURE): ParsedItem | null {
   const t = cleanTitle(title);
-  const key = guid.trim() || url || t;
+  // 記事の URL が無いエピソードは音声の URL を鍵に（guid も link も無い配信がある）
+  const key = guid.trim() || url || enc.enclosure_url || t;
   if (!key) return null;
-  return { guid: key.slice(0, 1000), url, title: t || url || "（無題）", published_at: toIso(published) };
+  const base = { guid: key.slice(0, 1000), url, title: t || url || "（無題）", published_at: toIso(published) };
+  // 添付の無い記事は今までと同じ形のまま
+  return enc.enclosure_url ? { ...base, ...enc } : base;
+}
+
+/** itunes:duration（"3725"・"62:05"・"1:02:05"）を秒に。読めなければ null */
+export function parseDuration(v: string): number | null {
+  const s = v.trim();
+  if (!s) return null;
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const n = Math.round(Number(s));
+    return n > 0 && n < 86400 * 2 ? n : null;
+  }
+  const m = /^(?:(\d{1,3}):)?(\d{1,3}):(\d{1,2})(?:\.\d+)?$/.exec(s);
+  if (!m) return null;
+  const n = Number(m[1] ?? 0) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+  return n > 0 ? n : null;
+}
+
+/** 音声らしい添付を優先して1つ選ぶ（audio/* → video/* → 種類不明 → その他） */
+function pickEnclosure(cands: { url: string | null; type: string | null }[]): { url: string; type: string | null } | null {
+  const ok = cands.filter((c): c is { url: string; type: string | null } => !!c.url);
+  const rank = (t: string | null) => (t?.startsWith("audio/") ? 0 : t?.startsWith("video/") ? 1 : !t ? 2 : 3);
+  return ok.sort((a, b) => rank(a.type) - rank(b.type))[0] ?? null;
+}
+
+function attr(o: unknown, name: string): string | null {
+  if (!o || typeof o !== "object") return null;
+  const v = (o as Record<string, unknown>)["@_" + name];
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+/** RSS の <enclosure url type length> と <itunes:duration> */
+function rssEnclosure(i: Record<string, unknown>, base: string): Enclosure {
+  const raw = i["enclosure"];
+  const list = Array.isArray(raw) ? raw : raw == null ? [] : [raw];
+  const enc = pickEnclosure(list.map((e) => ({ url: absUrl(attr(e, "url"), base), type: attr(e, "type")?.toLowerCase() ?? null })));
+  if (!enc) return NO_ENCLOSURE;
+  return { enclosure_url: enc.url, enclosure_type: enc.type, duration_sec: parseDuration(text(i["itunes:duration"])) };
+}
+
+/** Atom の <link rel="enclosure" href type> */
+function atomEnclosure(links: Node, base: string): Enclosure {
+  const arr = Array.isArray(links) ? links : links == null ? [] : [links];
+  const enc = pickEnclosure(
+    arr.filter((l) => attr(l, "rel") === "enclosure").map((l) => ({ url: absUrl(attr(l, "href"), base), type: attr(l, "type")?.toLowerCase() ?? null })),
+  );
+  return enc ? { enclosure_url: enc.url, enclosure_type: enc.type, duration_sec: null } : NO_ENCLOSURE;
 }
 
 /** Atom の link 群から rel=alternate（無ければ rel 無し）の href */
@@ -142,7 +202,7 @@ function parseRss(channel: Record<string, unknown>, items: Node[], base: string,
     const i = raw as Record<string, unknown>;
     const link = atomLink(i["link"], base) ?? absUrl(text(i["link"]), base);
     const guid = text(i["guid"]) || (typeof i["@_rdf:about"] === "string" ? (i["@_rdf:about"] as string) : "");
-    const it = item(guid, link, text(i["title"]), text(i["pubDate"]) || text(i["dc:date"]) || text(i["published"]));
+    const it = item(guid, link, text(i["title"]), text(i["pubDate"]) || text(i["dc:date"]) || text(i["published"]), rssEnclosure(i, base));
     if (it) out.push(it);
   }
   return {
@@ -161,7 +221,7 @@ function parseAtom(feed: Record<string, unknown>, base: string): ParsedFeed {
     if (!raw || typeof raw !== "object") continue;
     const e = raw as Record<string, unknown>;
     const link = atomLink(e["link"], base);
-    const it = item(text(e["id"]), link, text(e["title"]), text(e["published"]) || text(e["updated"]));
+    const it = item(text(e["id"]), link, text(e["title"]), text(e["published"]) || text(e["updated"]), atomEnclosure(e["link"], base));
     if (it) out.push(it);
   }
   return { kind: "atom", title: cleanTitle(text(feed["title"])), site_url: atomLink(feed["link"], base), image_url: null, items: out };
@@ -186,7 +246,16 @@ function parseJsonFeed(body: string, base: string): ParsedFeed | null {
     const id = typeof i.id === "string" || typeof i.id === "number" ? String(i.id) : "";
     const title = typeof i.title === "string" ? i.title : typeof i.content_text === "string" ? i.content_text.slice(0, 80) : "";
     const pub = typeof i.date_published === "string" ? i.date_published : typeof i.date_modified === "string" ? i.date_modified : "";
-    const it = item(id, url, title, pub);
+    const atts = Array.isArray(i.attachments) ? (i.attachments as Record<string, unknown>[]) : [];
+    const enc = pickEnclosure(
+      atts.map((a) => ({
+        url: absUrl(typeof a?.url === "string" ? a.url : null, base),
+        type: typeof a?.mime_type === "string" ? a.mime_type.toLowerCase() : null,
+      })),
+    );
+    const att = enc ? atts.find((a) => absUrl(typeof a?.url === "string" ? a.url : null, base) === enc.url) : undefined;
+    const dur = typeof att?.duration_in_seconds === "number" && att.duration_in_seconds > 0 ? Math.round(att.duration_in_seconds) : null;
+    const it = item(id, url, title, pub, enc ? { enclosure_url: enc.url, enclosure_type: enc.type, duration_sec: dur } : NO_ENCLOSURE);
     if (it) out.push(it);
   }
   return {

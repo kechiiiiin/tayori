@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>山の話のラジオ</title>
+    <link>https://show.example/</link>
+    <itunes:image href="https://show.example/art.jpg"/>
+    <item>
+      <title>#3 冬の装備</title>
+      <link>https://show.example/ep/3</link>
+      <guid isPermaLink="false">show-ep-3</guid>
+      <pubDate>Wed, 18 Nov 2026 05:00:00 +0900</pubDate>
+      <enclosure url="https://cdn.show.example/ep3.mp3" length="12345678" type="audio/mpeg"/>
+      <itunes:duration>1:02:05</itunes:duration>
+    </item>
+    <item>
+      <title>#2 秋の山小屋</title>
+      <guid>show-ep-2</guid>
+      <pubDate>Wed, 11 Nov 2026 05:00:00 +0900</pubDate>
+      <enclosure url="/audio/ep2.m4a" length="1" type="audio/x-m4a"/>
+      <itunes:duration>42:30</itunes:duration>
+    </item>
+    <item>
+      <title>#1 はじめまして</title>
+      <guid>show-ep-1</guid>
+      <pubDate>Wed, 04 Nov 2026 05:00:00 +0900</pubDate>
+      <enclosure url="https://cdn.show.example/ep1-cover.jpg" type="image/jpeg"/>
+      <enclosure url="https://cdn.show.example/ep1.mp3" type="audio/mpeg"/>
+      <itunes:duration>1800</itunes:duration>
+    </item>
+    <item>
+      <title>お知らせ（音声なし）</title>
+      <link>https://show.example/news</link>
+      <guid>show-news</guid>
+      <pubDate>Mon, 02 Nov 2026 05:00:00 +0900</pubDate>
+    </item>
+  </channel>
+</rss>

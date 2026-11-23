@@ -3,13 +3,16 @@ import { findFeedLinks } from "./discover.ts";
 import type { ApnsSender } from "./apns.ts";
 import { pickNotices, sendNotices, type Notice } from "./notify.ts";
 import { absUrl, parseFeed, type ParsedFeed } from "./parse.ts";
+import { convertToPodcast, upsertEpisodes } from "./podcast.ts";
 import {
   findFeedByUrl,
+  getFeedRow,
   insertFeed,
   insertItems,
   markFetched,
   purgeOld,
   staleFeeds,
+  type FeedKind,
   type FeedRow,
 } from "./store.ts";
 
@@ -100,8 +103,15 @@ export async function refreshFeed(db: D1Database, feed: FeedRow, deps: FetchDeps
     }
     const parsed = parseFeed(got.body, got.url);
     if (!parsed) throw new FetchError("フィードとして読めません");
+    const fetched = { etag: got.etag, last_modified: got.last_modified, site_url: parsed.site_url, image_url: parsed.image_url };
+    if (feed.kind === "podcast") {
+      // 番組: 上限まで入れ、enclosure を埋め直す。プッシュは鳴らさない（「メイン」のカテゴリに入らない）
+      const added = await upsertEpisodes(db, feed.id, parsed.items, now);
+      await markFetched(db, feed.id, fetched, now);
+      return { status: "ok", added };
+    }
     const inserted = await insertItems(db, feed.id, parsed.items, now, false);
-    await markFetched(db, feed.id, { etag: got.etag, last_modified: got.last_modified, site_url: parsed.site_url, image_url: parsed.image_url }, now);
+    await markFetched(db, feed.id, fetched, now);
     if (notices && inserted.length) notices.push(...(await pickNotices(db, feed.id, inserted, now)));
     return { status: "ok", added: inserted.length };
   } catch (e) {
@@ -168,6 +178,8 @@ export function normalizeUrl(v: unknown): string | null {
 export type AddResult =
   | { kind: "created"; id: number }
   | { kind: "exists"; id: number }
+  /** 記事として購読していたフィードを番組として足した（番組へ移して取り直した） */
+  | { kind: "converted"; id: number }
   | { kind: "error"; error: "fetch_failed" | "feed_not_found"; detail?: string };
 
 /**
@@ -175,11 +187,28 @@ export type AddResult =
  * 1. 貼った URL を取りに行き、フィードとして読めればそれ
  * 2. HTML なら <link rel="alternate"> の候補を上から試す（最大3本）
  * 3. どれもだめなら feed_not_found
- * 足したら直近 INITIAL_ITEMS 件を未読で入れる
+ * 足したら直近 INITIAL_ITEMS 件を未読で入れる。
+ * kind = podcast（番組として足す）はカテゴリを持たず、新しい順に PODCAST_MAX_EPISODES 回まで入れる。
+ * 記事として購読済みのフィードを番組として足したら、番組へ移して取り直す
  */
-export async function addFeed(db: D1Database, rawUrl: string, categoryId: number | null, deps: FetchDeps): Promise<AddResult> {
+export async function addFeed(
+  db: D1Database,
+  rawUrl: string,
+  categoryId: number | null,
+  deps: FetchDeps,
+  kind: FeedKind = "article",
+): Promise<AddResult> {
+  const exists = async (id: number): Promise<AddResult> => {
+    if (kind !== "podcast") return { kind: "exists", id };
+    const row = await getFeedRow(db, id);
+    if (!row || row.kind === "podcast") return { kind: "exists", id };
+    await convertToPodcast(db, id);
+    const fresh = await getFeedRow(db, id);
+    if (fresh) await refreshFeed(db, fresh, deps);
+    return { kind: "converted", id };
+  };
   const existing = await findFeedByUrl(db, rawUrl);
-  if (existing) return { kind: "exists", id: existing };
+  if (existing) return exists(existing);
 
   let page: Got;
   try {
@@ -194,7 +223,7 @@ export async function addFeed(db: D1Database, rawUrl: string, categoryId: number
   if (!parsed) {
     for (const cand of findFeedLinks(page.body, page.url).slice(0, 3)) {
       const ex = await findFeedByUrl(db, cand);
-      if (ex) return { kind: "exists", id: ex };
+      if (ex) return exists(ex);
       try {
         const g = await get(deps, cand);
         const p = parseFeed(g.body, g.url);
@@ -212,14 +241,15 @@ export async function addFeed(db: D1Database, rawUrl: string, categoryId: number
   if (!parsed) return { kind: "error", error: "feed_not_found" };
 
   const again = await findFeedByUrl(db, feedUrl);
-  if (again) return { kind: "exists", id: again };
+  if (again) return exists(again);
 
   const now = deps.now();
   const siteUrl = parsed.site_url ?? (got === page ? null : page.url) ?? new URL(feedUrl).origin + "/";
   const id = await insertFeed(
     db,
     {
-      category_id: categoryId,
+      kind,
+      category_id: kind === "podcast" ? null : categoryId,
       title: parsed.title || new URL(siteUrl).hostname,
       site_url: siteUrl,
       feed_url: feedUrl,
@@ -230,6 +260,7 @@ export async function addFeed(db: D1Database, rawUrl: string, categoryId: number
     now,
   );
   // 初めての取り込みは知らせない（古い記事がまとめて入るため）
-  await insertItems(db, id, parsed.items, now, true);
+  if (kind === "podcast") await upsertEpisodes(db, id, parsed.items, now);
+  else await insertItems(db, id, parsed.items, now, true);
   return { kind: "created", id };
 }

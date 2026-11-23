@@ -20,6 +20,7 @@ test("サイトの URL → <link rel=alternate> を上から試し、読めた�
     { ...r.json.feed, id: 0 },
     {
       id: 0,
+      kind: "article",
       category_id: cat,
       title: "Zenn architecture",
       site_url: "https://zenn.example/topics/architecture",

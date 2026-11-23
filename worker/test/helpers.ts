@@ -119,3 +119,14 @@ export function setup(o: { now?: string; env?: Partial<Env> } = {}) {
   }
   return { db, raw, clock, web, env, deps, call, count };
 }
+
+/** n 回のポッドキャストの RSS（新しい順・1日ずつ古くなる・どの回にも音声と長さ）。prefix で guid を変える */
+export function podcastWith(n: number, opts: { prefix?: string; start?: string; title?: string } = {}): string {
+  const start = Date.parse(opts.start ?? "2026-11-18T00:00:00Z");
+  const p = opts.prefix ?? "e";
+  const items = Array.from({ length: n }, (_, i) => {
+    const d = new Date(start - i * 86400_000).toUTCString();
+    return `<item><title>第${n - i}回</title><guid>${p}-${n - i}</guid><pubDate>${d}</pubDate><enclosure url="https://cdn.pod.example/${p}/${n - i}.mp3" type="audio/mpeg" length="1"/><itunes:duration>${600 + i}</itunes:duration></item>`;
+  }).join("\n");
+  return `<?xml version="1.0"?><rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>${opts.title ?? "長寿番組"}</title><link>https://pod.example/</link><itunes:image href="https://pod.example/art.jpg"/>${items}</channel></rss>`;
+}
