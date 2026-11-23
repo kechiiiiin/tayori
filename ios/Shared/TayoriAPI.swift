@@ -20,6 +20,7 @@ enum APIError: LocalizedError, Equatable {
             case "bad_comment": return "コメントが長すぎます"
             case "bad_category": return "カテゴリが見つかりません"
             case "not_found": return "見つかりませんでした（もう消えたかもしれません）"
+            case "not_podcast": return "番組として足せませんでした"
             default: return "エラー（\(code) \(e)）"
             }
         }
@@ -165,6 +166,56 @@ final class TayoriAPI: @unchecked Sendable {
     func refreshFeed(_ id: Int) async throws -> Feed {
         let r: FeedEnvelope = try await call("POST", "/api/feeds/\(id)/refresh")
         return r.feed
+    }
+
+    // MARK: - ポッドキャスト（段階3）
+
+    func podcasts() async throws -> [Podcast] {
+        let r: PodcastList = try await call("GET", "/api/podcasts")
+        return r.podcasts
+    }
+
+    func addPodcast(url: String) async throws -> AddPodcastResult {
+        try await call("POST", "/api/podcasts", body: ["url": url])
+    }
+
+    func deletePodcast(_ id: Int) async throws {
+        _ = try await raw("DELETE", "/api/podcasts/\(id)", query: [], body: nil)
+    }
+
+    /// 番組の回（新しい順）。afterId を渡すとその id より後を昇順で
+    func episodes(podcast: Int? = nil, before: String? = nil, afterId: Int? = nil, limit: Int? = nil) async throws -> EpisodePage {
+        var q: [URLQueryItem] = []
+        if let before { q.append(URLQueryItem(name: "before", value: before)) }
+        if let afterId { q.append(URLQueryItem(name: "after_id", value: String(afterId))) }
+        if let limit { q.append(URLQueryItem(name: "limit", value: String(limit))) }
+        let path = podcast.map { "/api/podcasts/\($0)/episodes" } ?? "/api/episodes"
+        return try await call("GET", path, query: q)
+    }
+
+    /// iTunes Search API で番組を名前で探す（便りの Worker は通さない・認証なし）
+    func searchPodcasts(_ term: String) async throws -> [PodcastSearchResult] {
+        var c = URLComponents(string: "https://itunes.apple.com/search")!
+        c.queryItems = [
+            URLQueryItem(name: "media", value: "podcast"),
+            URLQueryItem(name: "entity", value: "podcast"),
+            URLQueryItem(name: "country", value: "JP"),
+            URLQueryItem(name: "limit", value: "25"),
+            URLQueryItem(name: "term", value: term),
+        ]
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(from: c.url!)
+        } catch {
+            throw APIError.transport((error as NSError).localizedDescription)
+        }
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.transport("検索できませんでした") }
+        do {
+            return try JSONDecoder().decode(PodcastSearchResponse.self, from: data).results.filter { $0.feedUrl != nil }
+        } catch {
+            throw APIError.transport("検索の結果を読めませんでした")
+        }
     }
 
     // MARK: - プッシュ通知の端末

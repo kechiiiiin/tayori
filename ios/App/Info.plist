@@ -35,6 +35,10 @@
 	<string>$(TAYORI_ACCESS_CLIENT_SECRET)</string>
 	<key>TayoriServerURL</key>
 	<string>$(TAYORI_SERVER_URL)</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

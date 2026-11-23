@@ -2,8 +2,10 @@
 #
 #   make generate   xcodegen で .xcodeproj を作る（生成物はコミットしない）
 #   make sim        シミュレータ向けにビルドだけ通す（Team ID 不要・アドホック署名）
+#   make test       キューの決まりのユニットテスト（TayoriTests・Worker 不要）
 #   make uitest     iPhone のシミュレータで UI テスト（Safari を左端スワイプで閉じて戻る・一覧の左右スワイプでカテゴリ）。先に ../worker で npm run dev と npm run seed
 #   make shots      iPhone と iPad のシミュレータで起動してスクリーンショット（先に ../worker で npm run dev と npm run seed）
+#                   ポッドキャスト（iphone-8〜14）は seed の実在の公開回を使う（アートワーク・音声はネットから）
 #   make archive    TestFlight 向けアーカイブ（Release・自動署名）。サービストークンをこの Mac のキーチェーンから埋め込む
 #   make export-testflight  .ipa を build/export/ に書き出す（送らない）
 #   make upload     API キーで App Store Connect へ上げる（Release.local.env と .p8 が要る）
@@ -31,7 +33,7 @@ ARCHIVE = build/Tayori.xcarchive
 KC_SERVICE ?= tayori-token
 SECRETS = Secrets.xcconfig
 
-.PHONY: generate sim uitest shots shots-phone shots-pad icon clean archive upload export-testflight release require-team require-asc-key
+.PHONY: generate sim test uitest shots shots-phone shots-pad icon clean archive upload export-testflight release require-team require-asc-key
 
 generate:
 	xcodegen generate
@@ -41,6 +43,12 @@ sim: generate
 	  -destination 'generic/platform=iOS Simulator' -configuration Debug \
 	  -derivedDataPath build-sim CODE_SIGN_IDENTITY=- build
 	@echo "✅ シミュレータ向けのビルドは通る"
+
+# ユニットテスト（キューの決まり・Worker 不要）
+test: generate
+	@xcrun simctl list devices | grep -q "$(PHONE_SIM) (" || xcrun simctl create "$(PHONE_SIM)" "$(PHONE_TYPE)" > /dev/null
+	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'platform=iOS Simulator,name=$(PHONE_SIM)' \
+	  -configuration Debug -derivedDataPath build-sim CODE_SIGN_IDENTITY=- -only-testing:TayoriTests test
 
 # UI テスト（iPhone のシミュレータ・ローカルの Worker）。結果とスクショは build-sim/uitest.xcresult
 uitest: generate
@@ -53,7 +61,7 @@ uitest: generate
 # 起動引数で画面の状態を作って撮る（App/RootView.swift の applyDemo）。
 # $(1)=シミュレータ名 $(2)=接頭辞
 define shoot
-	xcrun simctl launch --terminate-running-process "$(1)" $(BUNDLE) -tayoriBaseURL $(LOCAL) $(3)
+	xcrun simctl launch --terminate-running-process "$(1)" $(BUNDLE) -tayoriBaseURL $(LOCAL) -tayoriPodcastReset $(3)
 	@sleep 8
 	xcrun simctl io "$(1)" screenshot $(SHOTS)/$(2).png
 endef
@@ -70,6 +78,14 @@ shots-phone: sim
 	$(call shoot,$(PHONE_SIM),iphone-6-sites,-tayoriScreen sites)
 	$(call shoot,$(PHONE_SIM),iphone-2-safari,-tayoriDemo safari)
 	$(call shoot,$(PHONE_SIM),iphone-7-share,-tayoriSharePreview https://blog.example.jp/)
+	$(call shoot,$(PHONE_SIM),iphone-8-podcast-queue,-tayoriPodcastDemo -tayoriMainTab podcasts)
+	$(call shoot,$(PHONE_SIM),iphone-9-podcast-new,-tayoriPodcastDemo -tayoriMainTab podcasts -tayoriPodcastTab new)
+	$(call shoot,$(PHONE_SIM),iphone-10-podcast-shows,-tayoriPodcastDemo -tayoriMainTab podcasts -tayoriPodcastTab shows)
+	$(call shoot,$(PHONE_SIM),iphone-11-podcast-show,-tayoriPodcastDemo -tayoriMainTab podcasts -tayoriPodcastShow Rebuild)
+	$(call shoot,$(PHONE_SIM),iphone-12-podcast-add,-tayoriMainTab podcasts -tayoriPodcastAdd コテンラジオ)
+	$(call shoot,$(PHONE_SIM),iphone-13-podcast-miniplayer,-tayoriPodcastDemo -tayoriMainTab podcasts -tayoriPodcastPlay)
+	$(call shoot,$(PHONE_SIM),iphone-14-podcast-player,-tayoriPodcastDemo -tayoriMainTab podcasts -tayoriPodcastPlay -tayoriPlayer open)
+	xcrun simctl terminate "$(PHONE_SIM)" $(BUNDLE)
 
 shots-pad: sim
 	@xcrun simctl list devices | grep -q "$(PAD_SIM) (" || xcrun simctl create "$(PAD_SIM)" "$(PAD_TYPE)" > /dev/null

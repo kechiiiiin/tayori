@@ -61,6 +61,18 @@ docs/screenshots/  シミュレータの実画面
 `wrangler d1 migrations apply tayori --remote` で 0004 と一緒に流れるので、**本番へ流す前に中身と対象（カテゴリ名「ポッドキャスト」のサイト）を確かめる**。
 移した番組は次の cron で最優先・条件なしで取り直され、回に音声の URL と長さが入る。
 
+## ポッドキャスト（段階3・iPhone）
+
+- 下のタブバーで「記事」「ポッドキャスト」を切り替える。記事のページは段階1・2 のまま
+- ポッドキャストの上のタブ: キュー（メイン・サブ…の順）→ 新着 → 番組。キューは ＋ のメニューで作り、タブの長押しで名前を変える・左右へ・消す
+- 回の右の ＋（か長押し）で、どのキューの先頭／末尾へ入れるかを選ぶ。キューの中は「並べ替え」・左スワイプで外す・右スワイプで別のキューへ
+- 番組の画面で回の一覧と「新着: 自動で入れない／〇〇の先頭へ／末尾へ」。新着はアプリが前に出るたびに読み、番組の設定に従ってキューへ（7日より古い回・足した直後の過去回は入れない）
+- 聴き終え＝最後まで再生した（途中で別の回へ移ったときは残り30秒未満なら聴き終え扱い）。キューから外れ、同じキューの先頭 → 空なら右隣のキュー（空のキューは飛ばす）の先頭へ。最後のキューまで聴き終えたら止まる
+- キューにある回は自動でダウンロード（バックグラウンドの URLSession・既定は Wi-Fi のときだけ・＋ のメニューで「モバイル通信でもダウンロード」）。落としてあれば端末内のファイルで再生、聴き終えた・キューから外した回のファイルは消す
+- 速度 0.5〜3.0 倍（0.1 刻み・全体で1つ）・15秒戻し／30秒送り・バックグラウンド再生・ロック画面とコントロールセンター・続きから再開。タブバーの上に小さなプレーヤー、押すと全画面
+- キュー・再生位置・自動追加の設定・ダウンロードは端末の中（`Application Support/podcast-state.json`・`Episodes/`）。Worker とは同期しない
+- 番組の追加は名前で探す（iTunes Search API・アプリから直接）か、フィードの URL
+
 ## 開発
 
 ```sh
@@ -79,6 +91,9 @@ make shots             # iPhone と iPad のシミュレータで撮る（docs/s
 
 DEBUG ビルドだけ、起動引数 `-tayoriBaseURL http://127.0.0.1:8792` でつなぎ先を差し替えられる（App Group に写すので共有拡張も同じ先を見る）。
 スクリーンショット用に `-tayoriDemo opened|comment|safari`・`-tayoriTab commented`・`-tayoriScreen sites`・`-tayoriSharePreview <URL>`（共有拡張と同じ画面をアプリ内に出す）・`-tayoriShareAutoAdd <カテゴリ名>` がある。
+
+ポッドキャスト（段階3）の撮影・試験用: `-tayoriMainTab podcasts`（下のタブ）・`-tayoriPodcastReset`（端末内のキュー・ダウンロードを消して始める）・`-tayoriPodcastDemo`（seed の回でメイン／サブのキューを作る）・`-tayoriPodcastTab new|shows|sub`・`-tayoriPodcastShow <番組名>`・`-tayoriPodcastAdd <検索語>`・`-tayoriPodcastAddURL <URL>`・`-tayoriPodcastPlay`（最初のキューの先頭を再生）・`-tayoriPlayer open`（全画面プレーヤー）・`-tayoriSeekNearEnd <秒>`（回を読み込むたびに末尾の N 秒前へ＝キューの連鎖の UI テスト）。
+`make test` はキューの決まり（QueueBook）のユニットテスト、`make uitest` は記事と段階3（`PodcastUITests`: 記事／ポッドキャストの切り替え・キューへの追加・メイン→サブ→停止の連鎖・速度と30秒送り）。
 
 IME: URL 欄・カテゴリ名の欄は `IMESafeTextField`（UITextField の `markedTextRange` が残っている間の Return は確定だけで送らない）。コメント欄は複数行で Return は改行（送信はボタンだけ）。
 

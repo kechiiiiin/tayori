@@ -82,6 +82,22 @@ targets:
         SKIP_INSTALL: YES
         TARGETED_DEVICE_FAMILY: "1,2"
 
+  # キューの決まり（QueueBook）のユニットテスト（make test）
+  TayoriTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Tayori
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jp.kechiiiiin.tayori.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Tayori.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tayori"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TARGETED_DEVICE_FAMILY: "1,2"
+
   # 画面の動きの確かめ（make uitest・ローカルの Worker に向けて動かす）
   TayoriUITests:
     type: bundle.ui-testing
@@ -108,6 +124,7 @@ schemes:
     test:
       config: Debug
       targets:
+        - TayoriTests
         - TayoriUITests
     archive:
       config: Release

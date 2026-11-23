@@ -149,4 +149,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         MainActor.assumeIsolated { PushManager.shared.didFailToRegister(error) }
     }
+
+    /// ポッドキャストのバックグラウンドのダウンロードが終わった（アプリが止まっていたら起こされる）
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        guard identifier == EpisodeDownloader.sessionIdentifier else { return completionHandler() }
+        EpisodeDownloader.shared.backgroundCompletion = completionHandler
+        EpisodeDownloader.shared.activate()
+    }
 }

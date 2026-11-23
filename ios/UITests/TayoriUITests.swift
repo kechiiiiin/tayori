@@ -8,7 +8,7 @@ final class TayoriUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = ["-tayoriBaseURL", "http://127.0.0.1:8792"]
+        app.launchArguments = ["-tayoriBaseURL", "http://127.0.0.1:8792", "-tayoriPodcastReset"]
         app.launch()
     }
 
@@ -54,15 +54,18 @@ final class TayoriUITests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
     }
 
-    /// サイト一覧の下のほう（seed のポッドキャストのアートワーク）を撮る。見るのは人の目
-    func testSitesShowsPodcastArtwork() throws {
+    /// 段階3: 番組はサイト一覧（記事）から消え、ポッドキャストの「番組」タブにアートワークつきで出る。見るのは人の目
+    func testPodcastShowsMovedOutOfSites() throws {
         XCTAssertTrue(app.cells.firstMatch.waitForExistence(timeout: 10))
         app.buttons["サイト"].firstMatch.tap()
-        let podcast = app.staticTexts["いつまじラジオ"].firstMatch
-        for _ in 0..<5 where !podcast.isHittable { app.swipeUp() }
+        XCTAssertTrue(app.navigationBars["サイト"].firstMatch.waitForExistence(timeout: 5))
+        for _ in 0..<3 { app.swipeUp() }
+        XCTAssertFalse(app.staticTexts["いつまじラジオ"].exists, "番組がサイト一覧に残っている")
+        app.tabBars.buttons["ポッドキャスト"].firstMatch.tap()
+        app.buttons.matching(NSPredicate(format: "label == '番組'")).firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["いつまじラジオ"].firstMatch.waitForExistence(timeout: 10))
         sleep(3) // アートワークの読み込み
-        XCTAssertTrue(podcast.isHittable)
-        attach("sites-artwork")
+        attach("podcast-shows-artwork")
     }
 
     /// 設定に通知のスイッチがある（撮って人の目で見る）
