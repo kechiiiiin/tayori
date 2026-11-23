@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// ① 一覧: 上にタブ（未読／コメントあり／すべて）とカテゴリの並び、行は新しい順。
-/// 行をタップ → アプリ内 Safari。戻ると下に「既読にする」「コメント」のバー（③）。左へスワイプで既読
+/// 行をタップ → アプリ内 Safari。戻ると下に「コメント」「既読にする」のバー（③）。
+/// 左右にスワイプで隣のカテゴリへ。長押しで既読／未読に戻す・コメント
 struct ItemListView: View {
     @Environment(AppModel.self) private var model
     /// iPhone はカテゴリの並びを上に出す（iPad はサイドバーにある）
@@ -83,19 +84,6 @@ struct ItemListView: View {
                     .onTapGesture { model.open(item) }
                     .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
                     .listRowBackground(model.lastOpened?.id == item.id ? Theme.highlight : Color(uiColor: .systemBackground))
-                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                        Button { startComment(item) } label: { Label("コメント", systemImage: "text.bubble") }
-                            .tint(Theme.accent)
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        if item.isRead {
-                            Button { Task { await model.setRead(item, false) } } label: { Text("未読に戻す") }
-                                .tint(.gray)
-                        } else {
-                            Button { Task { await model.setRead(item, true) } } label: { Text("既読") }
-                                .tint(Theme.readGreen)
-                        }
-                    }
                     .contextMenu {
                         Button { startComment(item) } label: {
                             Label(item.comment == nil ? "コメント" : "コメントを直す", systemImage: "text.bubble")
@@ -122,6 +110,17 @@ struct ItemListView: View {
         }
         .listStyle(.plain)
         .refreshable { await model.reload() }
+        // 一覧を左右にスワイプ → 隣のカテゴリへ（左へで右隣・右へで左隣・端で止まる）。
+        // 縦のスクロールを邪魔しないよう、横の動きが縦の倍以上・60pt 以上のときだけ
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 24, coordinateSpace: .local)
+                .onEnded { v in
+                    guard showCategoryBar, model.feedFilter == nil else { return }
+                    let dx = v.translation.width, dy = v.translation.height
+                    guard abs(dx) >= 60, abs(dx) > abs(dy) * 2 else { return }
+                    model.shiftCategory(by: dx < 0 ? 1 : -1)
+                }
+        )
     }
 
     /// 一覧からコメントを書く。戻りのバー（lastOpened）は触らない
@@ -148,15 +147,21 @@ struct CategoryBar: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .bottom, spacing: 0) {
-                tab("すべて", model.count(model.categories.total), .all)
-                ForEach(model.categories.categories) { c in
-                    tab(c.name, model.count(c.counts), .category(c.id))
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .bottom, spacing: 0) {
+                    tab("すべて", model.count(model.categories.total), .all)
+                    ForEach(model.categories.categories) { c in
+                        tab(c.name, model.count(c.counts), .category(c.id))
+                    }
+                    tab("未分類", model.count(model.categories.uncategorized), .none)
                 }
-                tab("未分類", model.count(model.categories.uncategorized), .none)
+                .padding(.horizontal, 6)
             }
-            .padding(.horizontal, 6)
+            // スワイプで切り替えたとき、選んだタブが見えるところまで寄せる
+            .onChange(of: model.category) { _, f in
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(f, anchor: .center) }
+            }
         }
     }
 
@@ -180,6 +185,7 @@ struct CategoryBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(on ? .isSelected : [])
+        .id(f)
     }
 }
 
@@ -270,17 +276,6 @@ struct ReturnBar: View {
             }
             HStack(spacing: 8) {
                 Button {
-                    Task { await model.setRead(item, true) }
-                } label: {
-                    Text(item.isRead ? "既読です" : "既読にする")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .foregroundStyle(.white)
-                        .background(Theme.accent.opacity(item.isRead ? 0.5 : 1), in: RoundedRectangle(cornerRadius: 12))
-                }
-                .disabled(item.isRead)
-                Button {
                     model.commentDraft = nil
                     model.commentTarget = item
                 } label: {
@@ -291,6 +286,17 @@ struct ReturnBar: View {
                         .foregroundStyle(.primary)
                         .background(Theme.chip, in: RoundedRectangle(cornerRadius: 12))
                 }
+                Button {
+                    Task { await model.setRead(item, true) }
+                } label: {
+                    Text(item.isRead ? "既読です" : "既読にする")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .foregroundStyle(.white)
+                        .background(Theme.accent.opacity(item.isRead ? 0.5 : 1), in: RoundedRectangle(cornerRadius: 12))
+                }
+                .disabled(item.isRead)
             }
             .buttonStyle(.plain)
         }

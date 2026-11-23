@@ -118,6 +118,20 @@ final class AppModel {
         Task { await reload() }
     }
 
+    /// カテゴリのタブの並び（すべて → 各カテゴリ → 未分類）。CategoryBar と同じ順
+    var categoryOrder: [CategoryFilter] {
+        [.all] + categories.categories.map { .category($0.id) } + [.none]
+    }
+
+    /// 隣のカテゴリへ（delta = +1 で右隣、-1 で左隣）。端では止まる
+    func shiftCategory(by delta: Int) {
+        let order = categoryOrder
+        guard let i = order.firstIndex(of: category) else { return }
+        let j = i + delta
+        guard order.indices.contains(j) else { return }
+        select(category: order[j])
+    }
+
     func select(feed f: Feed?) {
         feedFilter = f
         if f != nil { category = .all }
