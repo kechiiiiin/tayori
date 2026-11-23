@@ -54,6 +54,7 @@ docs/screenshots/  シミュレータの実画面
 | GET / DELETE | `/api/podcasts/:id` | 1番組／外す（回も消える） |
 | GET | `/api/podcasts/:id/episodes` | その番組の回（新しい順・既定 30 件・`limit` は 200 まで）。`before=<next>` で続き・`after_id`（その id より後を昇順で）→ `{ episodes, next }` |
 | GET | `/api/episodes` | 全番組の新着（新しい順）。クエリは同じ |
+| GET | `/api/episodes/:id` | 1回の詳細。一覧の項目に `description`（説明＝ショーノートの HTML・一覧には載せない）を足したもの → `{ episode }`。無ければ 404 |
 
 ### 「ポッドキャスト」カテゴリを番組へ移す（段階3・一度だけ）
 
@@ -69,12 +70,21 @@ docs/screenshots/  シミュレータの実画面
 
 ローカルで無限スクロールを試す: `npm run seed` のあと `npm run seed:long`（345 回の「長寿番組（試験）」）。
 
+### 回の説明（ショーノート）を持つ（2026-11-24・一度だけ）
+
+`migrations/0007_episode_description.sql` は `episodes.description`（HTML のまま）を足し、番組の ETag／Last-Modified を消す。
+取得では `content:encoded` → `description` → `itunes:summary`（Atom は `content` → `summary`、JSON Feed は `content_html` → `content_text` → `summary`）の最初に中身のあるものを、UTF-8 で 50KB（`DESCRIPTION_MAX_BYTES`）までに切って入れる。
+既知の回は今までどおり書かず、**説明がまだ NULL で今回は説明のある回だけ** UPDATE して埋める（説明の中身の変化は見ない）。0007 のあとの最初の取得で、全番組が条件なしに全文を読み直して埋まる。
+
 ## ポッドキャスト（段階3・iPhone）
 
-- 下のタブバーで「記事」「ポッドキャスト」を切り替える。記事のページは段階1・2 のまま
+- 下のタブバーは「ポッドキャスト｜記事」の順で、起動するとポッドキャスト（2026-11-24）。記事のプッシュ通知をタップしたときは記事のタブで開く。記事のページは段階1・2 のまま
 - ポッドキャストの上のタブ: キュー（メイン・サブ…の順）→ 新着 → 番組。キューは ＋ のメニューで作り、タブの長押しで名前を変える・左右へ・消す
-- 回の右の ＋（か長押し）で、どのキューの先頭／末尾へ入れるかを選ぶ。キューの中は「並べ替え」・左スワイプで外す・右スワイプで別のキューへ
-- 番組の画面で回の一覧と「新着: 自動で入れない／〇〇の先頭へ／末尾へ」。新着はアプリが前に出るたびに読み、番組の設定に従ってキューへ（7日より古い回・足した直後の過去回は入れない）
+- 回の行をタップすると**再生せず**詳細ページ（アートワーク・題名・番組名・配信日・長さ・再生／続きから・キューへ・ダウンロード・聴き終えた・概要）。概要は説明の HTML を段落・改行・箇条書き・リンクの文字にし（画像・script は出さない）、リンクはアプリ内 Safari
+- 番組名・アートワーク（詳細・全画面プレーヤー・新着とキューの行）を押すと番組の画面へ
+- 回の右の ＋（か長押し）で、どのキューの先頭／末尾へ入れるかを選ぶ。キューの中は右端の取っ手（≡）をドラッグで並べ替え（編集モードなし・UIKit の UICollectionView）・左スワイプで外す・右スワイプで別のキューへ。キューの行には ＋ を出さない（取っ手が右端に来るため。キューの操作は長押しか詳細ページ）
+- 聴き終えた回は端末の中に記録し（`played`）、一覧でチェックの印と薄い文字。途中の回は残り時間と進み具合の線。詳細と長押しで「聴き終えたにする／未再生に戻す」（聴き終えたにするとキューから外れファイルも消える）。番組ごとの自動追加は聴き終えた回を入れない。もう一度再生すると「途中」に戻る
+- 番組の画面で回の一覧と「新着: 自動で入れない／〇〇の末尾へ」（自動追加は末尾だけ・2026-11-24。前に「先頭へ」にしていた番組は末尾として読む。手で入れるときは先頭／末尾を選べる）。新着はアプリが前に出るたびに読み、番組の設定に従ってキューへ（7日より古い回・足した直後の過去回は入れない）
 - 聴き終え＝最後まで再生した（途中で別の回へ移ったときは残り30秒未満なら聴き終え扱い）。キューから外れ、同じキューの先頭 → 空なら右隣のキュー（空のキューは飛ばす）の先頭へ。最後のキューまで聴き終えたら止まる
 - キューにある回は自動でダウンロード（バックグラウンドの URLSession・既定は Wi-Fi のときだけ・＋ のメニューで「モバイル通信でもダウンロード」）。落としてあれば端末内のファイルで再生、聴き終えた・キューから外した回のファイルは消す
 - 速度 0.5〜3.0 倍（0.1 刻み・全体で1つ）・15秒戻し／30秒送り・バックグラウンド再生・ロック画面とコントロールセンター・続きから再開。タブバーの上に小さなプレーヤー、押すと全画面
@@ -101,8 +111,8 @@ make shots             # iPhone と iPad のシミュレータで撮る（docs/s
 DEBUG ビルドだけ、起動引数 `-tayoriBaseURL http://127.0.0.1:8792` でつなぎ先を差し替えられる（App Group に写すので共有拡張も同じ先を見る）。
 スクリーンショット用に `-tayoriDemo opened|comment|safari`・`-tayoriTab commented`・`-tayoriScreen sites`・`-tayoriSharePreview <URL>`（共有拡張と同じ画面をアプリ内に出す）・`-tayoriShareAutoAdd <カテゴリ名>` がある。
 
-ポッドキャスト（段階3）の撮影・試験用: `-tayoriMainTab podcasts`（下のタブ）・`-tayoriPodcastReset`（端末内のキュー・ダウンロードを消して始める）・`-tayoriPodcastDemo`（seed の回でメイン／サブのキューを作る）・`-tayoriPodcastTab new|shows|sub`・`-tayoriPodcastShow <番組名>`・`-tayoriPodcastAdd <検索語>`・`-tayoriPodcastAddURL <URL>`・`-tayoriPodcastPlay`（最初のキューの先頭を再生）・`-tayoriPlayer open`（全画面プレーヤー）・`-tayoriSeekNearEnd <秒>`（回を読み込むたびに末尾の N 秒前へ＝キューの連鎖の UI テスト）。
-`make test` はキューの決まり（QueueBook）のユニットテスト、`make uitest` は記事と段階3（`PodcastUITests`: 記事／ポッドキャストの切り替え・キューへの追加・メイン→サブ→停止の連鎖・速度と30秒送り）。
+ポッドキャスト（段階3）の撮影・試験用: `-tayoriMainTab podcasts`（下のタブ）・`-tayoriPodcastReset`（端末内のキュー・ダウンロードを消して始める）・`-tayoriPodcastDemo`（seed の回でメイン／サブのキューを作る）・`-tayoriPodcastTab new|shows|sub`・`-tayoriPodcastShow <番組名>`・`-tayoriPodcastAdd <検索語>`・`-tayoriPodcastAddURL <URL>`・`-tayoriPodcastPlay`（最初のキューの先頭を再生）・`-tayoriPlayer open`（全画面プレーヤー）・`-tayoriSeekNearEnd <秒>`（回を読み込むたびに末尾の N 秒前へ＝キューの連鎖の UI テスト）・`-tayoriMainTab articles`（記事のタブで始める）・`-tayoriPodcastEpisode <題名の一部>`（新着からその回の詳細）・`-tayoriPodcastPlayed <題名の一部,…>`（聴き終えたにする）・`-tayoriPodcastPosition <題名の一部>=<秒>`（途中まで聴いた）。
+`make test` はキューの決まり（QueueBook）と概要の変換・聴き終えた回・古い保存データの読み込みのユニットテスト、`make uitest` は記事と段階3（`PodcastUITests`: 記事／ポッドキャストの切り替え・キューへの追加・メイン→サブ→停止の連鎖・速度と30秒送り。`EpisodeDetailUITests`: 行のタップで詳細・詳細の再生とキュー・概要のリンク・取っ手のドラッグとスワイプ・番組の画面へ・タブの並び・聴き終えた）。
 
 IME: URL 欄・カテゴリ名の欄は `IMESafeTextField`（UITextField の `markedTextRange` が残っている間の Return は確定だけで送らない）。コメント欄は複数行で Return は改行（送信はボタンだけ）。
 

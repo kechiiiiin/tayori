@@ -80,12 +80,27 @@ struct FullPlayerView: View {
             .buttonStyle(.plain)
 
             if let ep = store.nowPlaying {
-                ArtworkView(url: ep.artworkURL, fallback: ep.feedTitle, size: 280)
-                    .shadow(color: .black.opacity(0.15), radius: 12, y: 6)
+                Button { openShow(ep.feedId) } label: {
+                    ArtworkView(url: ep.artworkURL, fallback: ep.feedTitle, size: 280)
+                        .shadow(color: .black.opacity(0.15), radius: 12, y: 6)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("番組のアートワーク")
+                .accessibilityIdentifier("playerArtwork")
                 VStack(spacing: 6) {
                     Text(ep.title).font(.headline).multilineTextAlignment(.center).lineLimit(3)
                     HStack(spacing: 6) {
-                        Text(ep.feedTitle).font(.subheadline).foregroundStyle(.secondary)
+                        Button { openShow(ep.feedId) } label: {
+                            HStack(spacing: 2) {
+                                Text(ep.feedTitle)
+                                Image(systemName: "chevron.right").font(.caption2.weight(.semibold))
+                            }
+                            .font(.subheadline)
+                            .foregroundStyle(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(ep.feedTitle)
+                        .accessibilityIdentifier("playerShow")
                         if store.isDownloaded(ep.id) {
                             Image(systemName: "arrow.down.circle.fill").font(.caption).foregroundStyle(Theme.readGreen)
                                 .accessibilityLabel("ダウンロード済み")
@@ -106,6 +121,15 @@ struct FullPlayerView: View {
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .background(Color(uiColor: .systemBackground))
+    }
+
+    /// 番組の画面へ: プレーヤーを閉じてから、ポッドキャストのタブでその番組を開く
+    private func openShow(_ feedId: Int) {
+        dismiss()
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            PodcastRouter.shared.openShow(feedId: feedId)
+        }
     }
 
     private var total: Double {

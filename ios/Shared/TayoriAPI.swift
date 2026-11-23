@@ -193,6 +193,12 @@ final class TayoriAPI: @unchecked Sendable {
         return try await call("GET", path, query: q)
     }
 
+    /// 1回の説明（ショーノートの HTML）。無ければ nil
+    func episodeNotes(_ id: Int) async throws -> String? {
+        let r: EpisodeNotesEnvelope = try await call("GET", "/api/episodes/\(id)")
+        return r.episode.description
+    }
+
     /// iTunes Search API で番組を名前で探す（便りの Worker は通さない・認証なし）
     func searchPodcasts(_ term: String) async throws -> [PodcastSearchResult] {
         var c = URLComponents(string: "https://itunes.apple.com/search")!

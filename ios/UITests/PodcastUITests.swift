@@ -26,6 +26,7 @@ final class PodcastUITests: XCTestCase {
         attach("podcast-queue")
         app.tabBars.buttons["記事"].firstMatch.tap()
         XCTAssertTrue(app.cells.firstMatch.waitForExistence(timeout: 10), "記事の一覧が出ない")
+        XCTAssertEqual(app.tabBars.buttons.element(boundBy: 0).label, "ポッドキャスト", "下のタブの左がポッドキャストでない")
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH '仕事'")).firstMatch.exists, "記事のカテゴリのタブが無い")
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'いつまじラジオ'")).firstMatch.exists, "記事一覧に番組の回が混ざっている")
         attach("articles")
@@ -76,7 +77,12 @@ final class PodcastUITests: XCTestCase {
         let head = text(containing: "#42")
         XCTAssertTrue(head.waitForExistence(timeout: 10))
         XCTAssertLessThan(head.frame.minY, text(containing: "#40").frame.minY, "メインの先頭が #42 でない")
+        // 行のタップは詳細ページ（2026-11-24）。再生は詳細の再生ボタンから
         head.tap()
+        let play = app.buttons["episodeDetailPlay"].firstMatch
+        XCTAssertTrue(play.waitForExistence(timeout: 8), "詳細ページが開かない")
+        play.tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         let title = app.staticTexts["nowPlayingTitle"]
         XCTAssertTrue(waitFor(title, contains: "#42", timeout: 30), "再生が始まらない")
         attach("playing-42")
@@ -120,7 +126,8 @@ final class PodcastUITests: XCTestCase {
         attach("long-show-top")
         // 1ページ目（345〜316）の外の回は、まだ読んでいない
         XCTAssertFalse(app.staticTexts["長寿 第315回"].exists, "初めから31件目以降を読んでいる")
-        let list = app.collectionViews.firstMatch
+        // キュー画面も UICollectionView なので、番組の回の一覧を名指しする（2026-11-24）
+        let list = app.collectionViews["showEpisodes"].firstMatch
         for target in ["長寿 第315回", "長寿 第280回", "長寿 第250回"] {
             let e = app.staticTexts[target].firstMatch
             var n = 0

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// 下のタブバーで「記事」と「ポッドキャスト」を切り替える（段階3）。
+/// 下のタブバーで「ポッドキャスト」と「記事」を切り替える（段階3）。並びはポッドキャストが左で、起動したときもポッドキャスト（2026-11-24）。
+/// 記事のプッシュ通知をタップしたとき（記事をアプリ内 Safari で開くとき）は記事のタブへ切り替える。
 /// - 記事: iPhone（幅が狭い）は一覧ひとつ。iPad・Mac（幅が広い）は左にカテゴリとサイトのサイドバー（段階1・2 のまま）
 /// - ポッドキャスト: PodcastRootView。再生中の回はタブバーの上の小さなプレーヤーに出し、押すと全画面
 struct RootView: View {
@@ -10,7 +11,8 @@ struct RootView: View {
     @State private var path: [Route] = []
     @State private var demoApplied = false
     @State private var sharePreview: String?
-    @State private var mainTab: MainTab = .articles
+    @State private var mainTab: MainTab = .podcasts
+    @State private var router = PodcastRouter.shared
     @State private var showPlayer = false
 
     enum Route: Hashable { case sites, settings }
@@ -22,11 +24,11 @@ struct RootView: View {
                 NavigationStack { SettingsView(firstRun: true) }
             } else {
                 TabView(selection: $mainTab) {
-                    Tab("記事", systemImage: "newspaper", value: MainTab.articles) {
-                        articles
-                    }
                     Tab("ポッドキャスト", systemImage: "headphones", value: MainTab.podcasts) {
                         PodcastRootView()
+                    }
+                    Tab("記事", systemImage: "newspaper", value: MainTab.articles) {
+                        articles
                     }
                 }
                 .modifier(MiniPlayerAccessory(onOpen: { showPlayer = true }))
@@ -38,8 +40,15 @@ struct RootView: View {
                 .presentationBackground(Color(uiColor: .systemBackground))
         }
         // アプリ内 Safari は SwiftUI の fullScreenCover ではなく UIKit の present で出す（左端スワイプで閉じられるように・SafariView.swift）
+        // 全画面プレーヤー・詳細ページから番組の画面へ行くとき、ポッドキャストのタブにする
+        .onChange(of: router.showTabRequest) { _, _ in
+            showPlayer = false
+            mainTab = .podcasts
+        }
         .onChange(of: model.presented?.id) { _, id in
             guard id != nil, let item = model.presented else { return }
+            // 記事（通知のタップを含む）を開くときは記事のタブへ（戻ったら「さっき開いた」のバーが見えるように）
+            mainTab = .articles
             guard let url = item.link else {
                 model.presented = nil
                 return
@@ -106,7 +115,7 @@ struct RootView: View {
 
     /// DEBUG のスクリーンショット用: 起動引数で画面の状態を作る
     ///   -tayoriTab unread|commented|all  -tayoriScreen sites  -tayoriDemo opened|comment|safari|listcomment  -tayoriSharePreview <URL>
-    ///   -tayoriMainTab podcasts（下のタブをポッドキャストに）・-tayoriPlayer open（全画面プレーヤーを開く）
+    ///   -tayoriMainTab podcasts|articles（下のタブ・既定はポッドキャスト）・-tayoriPlayer open（全画面プレーヤーを開く）
     private func applyDemo() async {
         #if DEBUG
         guard !demoApplied else { return }
@@ -117,10 +126,12 @@ struct RootView: View {
             return args[args.index(after: i)]
         }
         if value("-tayoriMainTab") == "podcasts" { mainTab = .podcasts }
+        if value("-tayoriMainTab") == "articles" { mainTab = .articles }
         // 起動直後は scenePhase の読み直しと重なるので、一覧が埋まるまで待つ（最大 5 秒）
         for _ in 0..<50 where model.items.isEmpty { try? await Task.sleep(for: .milliseconds(100)) }
         if value("-tayoriPlayer") == "open" {
-            for _ in 0..<50 where PodcastStore.shared.nowPlaying == nil { try? await Task.sleep(for: .milliseconds(100)) }
+            // 再生の始まり（ポッドキャストのページの読み込み後）を最大 15 秒待つ
+            for _ in 0..<150 where PodcastStore.shared.nowPlaying == nil { try? await Task.sleep(for: .milliseconds(100)) }
             showPlayer = true
         }
         if let t = value("-tayoriTab"), let s = ItemState(rawValue: t), s != model.state {

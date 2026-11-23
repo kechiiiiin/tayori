@@ -130,22 +130,40 @@ final class QueueBookTests: XCTestCase {
         let since = Date().addingTimeInterval(-7 * 86400)
         // 入れない
         XCTAssertEqual(b.autoAdd([ep(10)], setting: .off, since: since), 0)
-        // 先頭へ: 新しい回が上に来る。7日より古い回・もうある回は入れない
+        // 末尾へ（2026-11-24 から自動追加は末尾だけ）: 古い順に後ろへ。7日より古い回・もうある回は入れない
         let fresh = [ep(10, daysAgo: 2), ep(11, daysAgo: 1), ep(12, daysAgo: 30), ep(1)]
-        XCTAssertEqual(b.autoAdd(fresh, setting: .queue(main, atTop: true), since: since), 2)
-        XCTAssertEqual(ids(b, 0), [11, 10, 1])
-        // 末尾へ: 古い順に後ろへ
-        XCTAssertEqual(b.autoAdd([ep(20, daysAgo: 3), ep(21, daysAgo: 1)], setting: .queue(sub, atTop: false), since: since), 2)
+        XCTAssertEqual(b.autoAdd(fresh, setting: .queue(main), since: since), 2)
+        XCTAssertEqual(ids(b, 0), [1, 10, 11])
+        XCTAssertEqual(b.autoAdd([ep(20, daysAgo: 3), ep(21, daysAgo: 1)], setting: .queue(sub), since: since), 2)
         XCTAssertEqual(ids(b, 1), [20, 21])
         // 消えたキューへの設定は何もしない
-        XCTAssertEqual(b.autoAdd([ep(30)], setting: .queue(UUID(), atTop: true), since: since), 0)
+        XCTAssertEqual(b.autoAdd([ep(30)], setting: .queue(UUID()), since: since), 0)
+    }
+
+    /// 2026-11-24 より前の「先頭へ」の設定は末尾として読む（atTop を読み捨てる）
+    func testOldAtTopAutoAddDecodesAsQueueTail() throws {
+        let id = UUID()
+        let old = #"{"queue":{"_0":"\#(id.uuidString)","atTop":true}}"#
+        XCTAssertEqual(try JSONDecoder().decode(AutoAdd.self, from: Data(old.utf8)), .queue(id))
+        let oldOff = #"{"off":{}}"#
+        XCTAssertEqual(try JSONDecoder().decode(AutoAdd.self, from: Data(oldOff.utf8)), .off)
+        // 端末の状態ごと: 先頭への設定が末尾になり、ほかはそのまま
+        var b = QueueBook.initial()
+        let main = b.queues[0].id
+        b.add(ep(1), to: main, atTop: false)
+        let state = #"{"book":\#(String(decoding: try JSONEncoder().encode(b), as: UTF8.self)),"positions":{"1":12.5},"autoAdd":{"7":{"queue":{"_0":"\#(main.uuidString)","atTop":true}}},"watermarks":{"7":42},"speed":1.3,"allowCellular":false}"#
+        let s = try JSONDecoder().decode(PodcastState.self, from: Data(state.utf8))
+        XCTAssertEqual(s.autoAdd[7], .queue(main))
+        XCTAssertEqual(s.positions[1], 12.5)
+        XCTAssertEqual(s.watermarks[7], 42)
+        XCTAssertEqual(s.book, b)
     }
 
     func testStateRoundTripsThroughJSON() throws {
         var s = PodcastState()
         s.book.add(ep(1), to: s.book.queues[1].id, atTop: false)
         s.positions[1] = 123.5
-        s.autoAdd[7] = .queue(s.book.queues[0].id, atTop: true)
+        s.autoAdd[7] = .queue(s.book.queues[0].id)
         s.watermarks[7] = 42
         s.speed = 1.3
         s.nowPlaying = ep(1)

@@ -183,6 +183,13 @@ enum When {
         return short(d)
     }
 
+    /// 配信日: 「2026年11月24日」
+    static func fullDate(_ s: String?) -> String {
+        guard let d = date(s) else { return "" }
+        let c = calendar.dateComponents([.year, .month, .day], from: d)
+        return "\(c.year ?? 0)年\(c.month ?? 0)月\(c.day ?? 0)日"
+    }
+
     private static func short(_ d: Date) -> String {
         let c = calendar.dateComponents([.month, .day], from: d)
         return "\(c.month ?? 0)/\(c.day ?? 0)"
@@ -250,6 +257,16 @@ struct Episode: Codable, Identifiable, Hashable, Sendable {
         default: return "mp3"
         }
     }
+}
+
+/// 回の詳細（GET /api/episodes/:id）。一覧の Episode に無いのは説明（ショーノート・HTML のまま）だけ
+struct EpisodeNotes: Codable, Sendable {
+    let id: Int
+    let description: String?
+}
+
+struct EpisodeNotesEnvelope: Codable, Sendable {
+    let episode: EpisodeNotes
 }
 
 struct EpisodePage: Codable, Sendable {

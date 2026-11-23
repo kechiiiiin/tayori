@@ -7,10 +7,11 @@ struct PodcastQueue: Codable, Identifiable, Hashable, Sendable {
     var episodes: [Episode]
 }
 
-/// 番組ごとの自動追加: 入れない（既定）／あるキューの先頭か末尾へ
+/// 番組ごとの自動追加: 入れない（既定）／あるキューの末尾へ（2026-11-24 から末尾だけ）。
+/// 2026-11-24 より前の保存データ（`{"queue":{"_0":…,"atTop":true}}`）は atTop を読み捨てて末尾として読む
 enum AutoAdd: Codable, Hashable, Sendable {
     case off
-    case queue(UUID, atTop: Bool)
+    case queue(UUID)
 }
 
 /// キューの並びと中身。画面・再生・保存から切り離した純粋なロジック（TayoriTests で確かめる）
@@ -107,6 +108,21 @@ struct QueueBook: Codable, Equatable, Sendable {
         queues[i].episodes = eps
     }
 
+    /// キューの並びを id の並びに合わせる（取っ手でドラッグした後の並び）。知らない id は無視し、並びに無い回は末尾に残す
+    mutating func reorder(in queueId: UUID, to ids: [Int]) {
+        guard let i = index(of: queueId) else { return }
+        let eps = queues[i].episodes
+        var byId: [Int: Episode] = [:]
+        for e in eps { byId[e.id] = e }
+        var seen = Set<Int>()
+        var out: [Episode] = []
+        for id in ids where !seen.contains(id) {
+            if let e = byId[id] { out.append(e); seen.insert(id) }
+        }
+        out += eps.filter { !seen.contains($0.id) }
+        queues[i].episodes = out
+    }
+
     // MARK: - 聴き終えたとき
 
     /// 聴き終えた回をキューから外し、次に再生する回を返す。
@@ -127,14 +143,14 @@ struct QueueBook: Codable, Equatable, Sendable {
 
     /// 番組の新着をその番組の設定に従って入れる。fresh は id の昇順（古い→新しい）。
     /// 入れるのは since より新しい回だけ（過去回が後から足されたときにまとめて入らないように）・もうどこかのキューにある回は動かさない。
-    /// 先頭へ入れるときも、新しい回が上に来る（古い順に1つずつ先頭へ）。入れた数を返す
+    /// 入れるのはいつもキューの末尾（古い順に後ろへ）。skipping（聴き終えた回）は入れない。入れた数を返す
     @discardableResult
-    mutating func autoAdd(_ fresh: [Episode], setting: AutoAdd, since: Date) -> Int {
-        guard case let .queue(qid, atTop) = setting, index(of: qid) != nil else { return 0 }
+    mutating func autoAdd(_ fresh: [Episode], setting: AutoAdd, since: Date, skipping: Set<Int> = []) -> Int {
+        guard case let .queue(qid) = setting, index(of: qid) != nil else { return 0 }
         let picked = fresh
-            .filter { (When.date($0.publishedAt ?? $0.sortAt) ?? .distantPast) >= since && !contains($0.id) }
+            .filter { (When.date($0.publishedAt ?? $0.sortAt) ?? .distantPast) >= since && !contains($0.id) && !skipping.contains($0.id) }
             .sorted { ($0.publishedAt ?? $0.sortAt, $0.id) < ($1.publishedAt ?? $1.sortAt, $1.id) }
-        for e in picked { add(e, to: qid, atTop: atTop) }
+        for e in picked { add(e, to: qid, atTop: false) }
         return picked.count
     }
 }

@@ -8,7 +8,8 @@ final class TayoriUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = ["-tayoriBaseURL", "http://127.0.0.1:8792", "-tayoriPodcastReset"]
+        // 起動時はポッドキャストが開く（2026-11-24）ので、記事のテストは記事のタブから始める
+        app.launchArguments = ["-tayoriBaseURL", "http://127.0.0.1:8792", "-tayoriPodcastReset", "-tayoriMainTab", "articles"]
         app.launch()
     }
 

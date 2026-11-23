@@ -28,6 +28,7 @@ LOCAL   = http://127.0.0.1:8792
 SHOTS   = ../docs/screenshots
 APP     = build-sim/Build/Products/Debug-iphonesimulator/Tayori.app
 
+comma := ,
 ARCHIVE = build/Tayori.xcarchive
 # サービストークンの出どころ（ビルドする Mac のキーチェーン。読むだけで書き込まない）
 KC_SERVICE ?= tayori-token
@@ -71,13 +72,13 @@ shots-phone: sim
 	@xcrun simctl boot "$(PHONE_SIM)" 2>/dev/null || true
 	xcrun simctl install "$(PHONE_SIM)" $(APP)
 	@mkdir -p $(SHOTS)
-	$(call shoot,$(PHONE_SIM),iphone-1-list,)
-	$(call shoot,$(PHONE_SIM),iphone-3-returned,-tayoriDemo opened)
-	$(call shoot,$(PHONE_SIM),iphone-4-comment,-tayoriDemo comment)
-	$(call shoot,$(PHONE_SIM),iphone-5-commented,-tayoriTab commented)
-	$(call shoot,$(PHONE_SIM),iphone-6-sites,-tayoriScreen sites)
-	$(call shoot,$(PHONE_SIM),iphone-2-safari,-tayoriDemo safari)
-	$(call shoot,$(PHONE_SIM),iphone-7-share,-tayoriSharePreview https://blog.example.jp/)
+	$(call shoot,$(PHONE_SIM),iphone-1-list,-tayoriMainTab articles)
+	$(call shoot,$(PHONE_SIM),iphone-3-returned,-tayoriMainTab articles -tayoriDemo opened)
+	$(call shoot,$(PHONE_SIM),iphone-4-comment,-tayoriMainTab articles -tayoriDemo comment)
+	$(call shoot,$(PHONE_SIM),iphone-5-commented,-tayoriMainTab articles -tayoriTab commented)
+	$(call shoot,$(PHONE_SIM),iphone-6-sites,-tayoriMainTab articles -tayoriScreen sites)
+	$(call shoot,$(PHONE_SIM),iphone-2-safari,-tayoriMainTab articles -tayoriDemo safari)
+	$(call shoot,$(PHONE_SIM),iphone-7-share,-tayoriMainTab articles -tayoriSharePreview https://blog.example.jp/)
 	$(call shoot,$(PHONE_SIM),iphone-8-podcast-queue,-tayoriPodcastDemo -tayoriMainTab podcasts)
 	$(call shoot,$(PHONE_SIM),iphone-9-podcast-new,-tayoriPodcastDemo -tayoriMainTab podcasts -tayoriPodcastTab new)
 	$(call shoot,$(PHONE_SIM),iphone-10-podcast-shows,-tayoriPodcastDemo -tayoriMainTab podcasts -tayoriPodcastTab shows)
@@ -85,6 +86,9 @@ shots-phone: sim
 	$(call shoot,$(PHONE_SIM),iphone-12-podcast-add,-tayoriMainTab podcasts -tayoriPodcastAdd コテンラジオ)
 	$(call shoot,$(PHONE_SIM),iphone-13-podcast-miniplayer,-tayoriPodcastDemo -tayoriMainTab podcasts -tayoriPodcastPlay)
 	$(call shoot,$(PHONE_SIM),iphone-14-podcast-player,-tayoriPodcastDemo -tayoriMainTab podcasts -tayoriPodcastPlay -tayoriPlayer open)
+	$(call shoot,$(PHONE_SIM),iphone-17-episode-detail,-tayoriPodcastDemo -tayoriPodcastTab new -tayoriPodcastEpisode '#42')
+	$(call shoot,$(PHONE_SIM),iphone-18-podcast-new-played,-tayoriPodcastDemo -tayoriPodcastTab new -tayoriPodcastPlayed '#41$(comma)435' -tayoriPodcastPosition 434=2000)
+	$(call shoot,$(PHONE_SIM),iphone-19-podcast-launch-queue,-tayoriPodcastDemo)
 	xcrun simctl terminate "$(PHONE_SIM)" $(BUNDLE)
 
 shots-pad: sim
@@ -92,8 +96,8 @@ shots-pad: sim
 	@xcrun simctl boot "$(PAD_SIM)" 2>/dev/null || true
 	xcrun simctl install "$(PAD_SIM)" $(APP)
 	@mkdir -p $(SHOTS)
-	$(call shoot,$(PAD_SIM),ipad-1-list,)
-	$(call shoot,$(PAD_SIM),ipad-3-returned,-tayoriDemo opened)
+	$(call shoot,$(PAD_SIM),ipad-1-list,-tayoriMainTab articles)
+	$(call shoot,$(PAD_SIM),ipad-3-returned,-tayoriMainTab articles -tayoriDemo opened)
 
 shots: shots-phone shots-pad
 	@echo "✅ $(SHOTS)/ に保存した"

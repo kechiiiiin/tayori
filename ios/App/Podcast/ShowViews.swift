@@ -14,7 +14,7 @@ struct ShowsView: View {
                     .font(.subheadline)
             }
             ForEach(store.podcasts) { p in
-                NavigationLink(value: p) {
+                NavigationLink(value: PodcastRoute.show(p)) {
                     HStack(spacing: 12) {
                         ArtworkView(url: p.artworkURL, fallback: p.title, size: 52)
                         VStack(alignment: .leading, spacing: 3) {
@@ -66,9 +66,9 @@ enum AutoAddLabel {
     static func text(_ a: AutoAdd, store: PodcastStore) -> String {
         switch a {
         case .off: return "自動で入れない"
-        case let .queue(id, top):
+        case let .queue(id):
             let name = store.state.book.queue(id)?.name ?? "?"
-            return "\(name)の\(top ? "先頭" : "末尾")へ自動"
+            return "\(name)の末尾へ自動"
         }
     }
 }
@@ -108,6 +108,7 @@ struct ShowDetailView: View {
             }
         }
         .listStyle(.plain)
+        .accessibilityIdentifier("showEpisodes")
         .navigationTitle(podcast.title)
         .navigationBarTitleDisplayMode(.inline)
         .task { await reload() }
@@ -126,8 +127,7 @@ struct ShowDetailView: View {
                     Picker("自動追加", selection: Binding(get: { store.autoAdd(for: podcast.id) }, set: { store.setAutoAdd($0, for: podcast.id) })) {
                         Text("自動で入れない").tag(AutoAdd.off)
                         ForEach(store.queues) { q in
-                            Text("\(q.name)の先頭へ").tag(AutoAdd.queue(q.id, atTop: true))
-                            Text("\(q.name)の末尾へ").tag(AutoAdd.queue(q.id, atTop: false))
+                            Text("\(q.name)の末尾へ").tag(AutoAdd.queue(q.id))
                         }
                     }
                 } label: {

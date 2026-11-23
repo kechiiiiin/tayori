@@ -20,6 +20,25 @@ struct PodcastState: Codable, Equatable {
     /// 再生中（一時停止中を含む）の回と、そのとき再生していたキュー
     var nowPlaying: Episode?
     var playingQueue: UUID?
+    /// 聴き終えた回（id → 聴き終えた時刻）。最後まで再生した・残り30秒未満で次へ移った・手で「聴き終えた」にした回（2026-11-24 から）
+    var played: [Int: Date] = [:]
+
+    init() {}
+
+    /// 鍵が足りなくても読む（played の無い 2026-11-24 より前の保存データを、キューや位置を失わずに読むため）
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = PodcastState()
+        book = try c.decodeIfPresent(QueueBook.self, forKey: .book) ?? d.book
+        positions = try c.decodeIfPresent([Int: Double].self, forKey: .positions) ?? [:]
+        autoAdd = try c.decodeIfPresent([Int: AutoAdd].self, forKey: .autoAdd) ?? [:]
+        watermarks = try c.decodeIfPresent([Int: Int].self, forKey: .watermarks) ?? [:]
+        speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? d.speed
+        allowCellular = try c.decodeIfPresent(Bool.self, forKey: .allowCellular) ?? false
+        nowPlaying = try c.decodeIfPresent(Episode.self, forKey: .nowPlaying)
+        playingQueue = try c.decodeIfPresent(UUID.self, forKey: .playingQueue)
+        played = try c.decodeIfPresent([Int: Date].self, forKey: .played) ?? [:]
+    }
 }
 
 /// ポッドキャストのページと再生の中心: キュー・番組の設定・新着の取り込み・ダウンロード・AVPlayer・ロック画面
@@ -150,6 +169,11 @@ final class PodcastStore {
         mutate { $0.book.move(in: queueId, from: from, to: to) }
     }
 
+    /// 取っ手でドラッグして並べ替えた後の並び
+    func reorder(in queueId: UUID, to ids: [Int]) {
+        mutate { $0.book.reorder(in: queueId, to: ids) }
+    }
+
     @discardableResult
     func createQueue(_ name: String) -> UUID? {
         var id: UUID?
@@ -164,7 +188,7 @@ final class PodcastStore {
         mutate { s in
             s.book.deleteQueue(id)
             // その キューへの自動追加は「入れない」に戻す
-            for (feed, a) in s.autoAdd { if case .queue(id, _) = a { s.autoAdd[feed] = .off } }
+            for (feed, a) in s.autoAdd { if case .queue(id) = a { s.autoAdd[feed] = .off } }
             if s.playingQueue == id { s.playingQueue = nil }
         }
         Task { await reconcileDownloads() }
@@ -174,7 +198,7 @@ final class PodcastStore {
 
     func autoAdd(for feedId: Int) -> AutoAdd {
         let a = state.autoAdd[feedId] ?? .off
-        if case let .queue(q, _) = a, state.book.queue(q) == nil { return .off }
+        if case let .queue(q) = a, state.book.queue(q) == nil { return .off }
         return a
     }
 
@@ -260,7 +284,8 @@ final class PodcastStore {
                     errorMessage = error.localizedDescription
                     continue // 目印は進めない（次に読み直す）
                 }
-                mutate { $0.book.autoAdd(fresh, setting: setting, since: since) }
+                let skip = Set(state.played.keys)
+                mutate { $0.book.autoAdd(fresh, setting: setting, since: since, skipping: skip) }
             }
             mutate { $0.watermarks[p.id] = latest }
         }
@@ -376,6 +401,8 @@ final class PodcastStore {
         mutate {
             $0.nowPlaying = episode
             $0.playingQueue = q
+            // 聴き終えた回をもう一度聴く: 「途中」に戻る（頭から）
+            if $0.played.removeValue(forKey: episode.id) != nil { $0.positions[episode.id] = nil }
         }
         load(episode, autoplay: true)
         Task { await reconcileDownloads() }
@@ -475,6 +502,7 @@ final class PodcastStore {
         mutate { s in
             next = s.book.finish(ep.id, playingFrom: s.playingQueue)
             s.positions[ep.id] = nil
+            s.played[ep.id] = Date()
             s.nowPlaying = nil
             s.playingQueue = nil
         }
@@ -512,6 +540,41 @@ final class PodcastStore {
     }
 
     func position(of episodeId: Int) -> Double? { state.positions[episodeId] }
+
+    // MARK: - 聴き終えた
+
+    func isPlayed(_ episodeId: Int) -> Bool { state.played[episodeId] != nil }
+
+    /// 手で「聴き終えた」にする: 聴き終えたときと同じく、キューから外し、位置とファイルを消す（再生中なら止める）
+    func markPlayed(_ episode: Episode) {
+        if state.nowPlaying?.id == episode.id {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+            currentTime = 0
+            duration = 0
+            mutate {
+                $0.nowPlaying = nil
+                $0.playingQueue = nil
+            }
+            updateNowPlayingInfo()
+        }
+        mutate { s in
+            s.book.remove(episode.id)
+            s.positions[episode.id] = nil
+            s.played[episode.id] = Date()
+        }
+        EpisodeDownloader.deleteFile(for: episode.id)
+        downloaded.remove(episode.id)
+        Task { await reconcileDownloads() }
+    }
+
+    /// 未再生に戻す（位置も消す）
+    func markUnplayed(_ episodeId: Int) {
+        mutate { s in
+            s.played[episodeId] = nil
+            s.positions[episodeId] = nil
+        }
+    }
 
     // MARK: - AVPlayer の見張り
 
@@ -634,6 +697,11 @@ final class PodcastStore {
     // MARK: - DEBUG（スクリーンショット・UI テスト）
 
     #if DEBUG
+    /// 起動引数 -tayoriPodcastPosition: 途中まで聴いたことにする
+    func debugSetPosition(_ sec: Double, for episodeId: Int) {
+        mutate { $0.positions[episodeId] = sec }
+    }
+
     /// 起動引数 -tayoriPodcastDemo: seed の回でキューを作る（メイン＝いつまじ #42・#40、サブ＝いつまじ #41・Rebuild 436）
     func applyDemoQueues() {
         let eps = newEpisodes
@@ -647,7 +715,7 @@ final class PodcastStore {
             if let c = byTitle("#41") { s.book.add(c, to: sub, atTop: false) }
             if let d = byTitle("436") { s.book.add(d, to: sub, atTop: false) }
             if let first = s.book.queues.first?.id, let rebuild = eps.first(where: { $0.feedTitle == "Rebuild" }) {
-                s.autoAdd[rebuild.feedId] = .queue(first, atTop: true)
+                s.autoAdd[rebuild.feedId] = .queue(first)
             }
         }
         Task { await reconcileDownloads() }

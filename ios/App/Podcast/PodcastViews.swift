@@ -14,7 +14,7 @@ struct PodcastRootView: View {
     @State private var nameEditor: QueueNameEditor?
     @State private var deletingQueue: PodcastQueue?
     @State private var showAdd = false
-    @State private var path: [Podcast] = []
+    @State private var router = PodcastRouter.shared
     @State private var demoApplied = false
 
     private var selected: PodcastTab {
@@ -26,7 +26,7 @@ struct PodcastRootView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        NavigationStack(path: $router.path) {
             VStack(spacing: 0) {
                 tabBar
                 Divider()
@@ -48,7 +48,12 @@ struct PodcastRootView: View {
                     .accessibilityLabel("番組を足す・キューを作る")
                 }
             }
-            .navigationDestination(for: Podcast.self) { p in ShowDetailView(podcast: p) }
+            .navigationDestination(for: PodcastRoute.self) { r in
+                switch r {
+                case .show(let p): ShowDetailView(podcast: p)
+                case .episode(let e): EpisodeDetailView(episode: e)
+                }
+            }
         }
         .task {
             await store.refresh()
@@ -155,6 +160,8 @@ struct PodcastRootView: View {
 
     /// DEBUG のスクリーンショット・UI テスト用
     ///   -tayoriPodcastDemo（seed の回でキューを作る）・-tayoriPodcastPlay（最初のキューの先頭を再生）・-tayoriPodcastTab new|shows|sub・-tayoriPodcastShow <番組名>・-tayoriPodcastAdd <検索語>
+    ///   -tayoriPodcastEpisode <題名の一部>（新着からその回の詳細ページを開く）・-tayoriPodcastPlayed <題名の一部>（その回を聴き終えたにする・カンマ区切りで複数）
+    ///   -tayoriPodcastPosition <題名の一部>=<秒>（途中まで聴いたことにする）
     private func applyDemo() {
         #if DEBUG
         guard !demoApplied else { return }
@@ -173,9 +180,20 @@ struct PodcastRootView: View {
         case "sub": if store.queues.count > 1 { tab = .queue(store.queues[1].id) }
         default: break
         }
+        func episode(_ part: String) -> Episode? { store.newEpisodes.first { $0.title.contains(part) } }
+        if let list = value("-tayoriPodcastPlayed") {
+            for part in list.split(separator: ",") { if let e = episode(String(part)) { store.markPlayed(e) } }
+        }
+        if let spec = value("-tayoriPodcastPosition"), let eq = spec.lastIndex(of: "="),
+           let e = episode(String(spec[..<eq])), let sec = Double(spec[spec.index(after: eq)...]) {
+            store.debugSetPosition(sec, for: e.id)
+        }
         if let name = value("-tayoriPodcastShow"), let p = store.podcasts.first(where: { $0.title == name }) {
             tab = .shows
-            path = [p]
+            router.path = [.show(p)]
+        }
+        if let part = value("-tayoriPodcastEpisode"), let e = episode(part) {
+            router.path.append(.episode(e))
         }
         if value("-tayoriPodcastAdd") != nil || value("-tayoriPodcastAddURL") != nil { showAdd = true }
         #endif
@@ -188,44 +206,31 @@ struct QueueListView: View {
     @State private var store = PodcastStore.shared
     let queue: PodcastQueue
     var onRename: () -> Void = {}
-    @State private var editMode: EditMode = .inactive
     @State private var moving: Episode?
 
     var body: some View {
-        List {
-            Section {
-                ForEach(queue.episodes) { e in
-                    EpisodeRow(episode: e, inQueue: queue.id)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button(role: .destructive) { store.remove(e.id) } label: { Label("外す", systemImage: "minus.circle") }
-                        }
-                        .swipeActions(edge: .leading) {
-                            if store.queues.count > 1 {
-                                Button { moving = e } label: { Label("移す", systemImage: "arrow.right.arrow.left") }
-                                    .tint(Theme.readGreen)
-                            }
-                        }
-                }
-                .onMove { from, to in store.move(in: queue.id, from: from, to: to) }
-            } header: {
-                header
-            }
+        VStack(spacing: 0) {
+            header
             if queue.episodes.isEmpty {
-                VStack(spacing: 6) {
-                    Text("「\(queue.name)」は空です").font(.subheadline).foregroundStyle(.secondary)
-                    Text("新着や番組の回の ＋ から入れられます").font(.footnote).foregroundStyle(.tertiary)
+                List {
+                    VStack(spacing: 6) {
+                        Text("「\(queue.name)」は空です").font(.subheadline).foregroundStyle(.secondary)
+                        Text("新着や番組の回の ＋ から入れられます").font(.footnote).foregroundStyle(.tertiary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+                    .listRowSeparator(.hidden)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 40)
-                .listRowSeparator(.hidden)
+                .listStyle(.plain)
+                .refreshable { await store.refresh() }
+            } else {
+                // 右端の取っ手（≡）をつかんでドラッグで並べ替え（編集モードなし）・左スワイプで外す・右スワイプで移す
+                QueueCollectionView(queue: queue, onMoveRequest: { moving = $0 })
             }
             if let e = store.errorMessage {
-                Text(e).font(.footnote).foregroundStyle(Theme.error).listRowSeparator(.hidden)
+                Text(e).font(.footnote).foregroundStyle(Theme.error).padding(8)
             }
         }
-        .listStyle(.plain)
-        .environment(\.editMode, $editMode)
-        .refreshable { await store.refresh() }
         .confirmationDialog(
             "「\(moving?.title ?? "")」をどのキューへ移しますか？",
             isPresented: Binding(get: { moving != nil }, set: { if !$0 { moving = nil } }),
@@ -241,17 +246,15 @@ struct QueueListView: View {
     private var header: some View {
         HStack {
             let total = queue.episodes.reduce(0) { a, e in a + max(0, (e.durationSec ?? 0) - Int(store.position(of: e.id) ?? 0)) }
-            Text(queue.episodes.isEmpty ? "" : "\(queue.episodes.count)回 · 残り \(Duration.label(total))")
+            Text(queue.episodes.isEmpty ? " " : "\(queue.episodes.count)回 · 残り \(Duration.label(total))")
                 .font(.caption).foregroundStyle(.secondary)
             Spacer()
             if queue.episodes.count > 1 {
-                Button(editMode == .active ? "終わる" : "並べ替え") {
-                    withAnimation { editMode = editMode == .active ? .inactive : .active }
-                }
-                .font(.caption.weight(.semibold))
+                Text("≡ をドラッグで並べ替え").font(.caption2).foregroundStyle(.tertiary)
             }
         }
-        .textCase(nil)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
     }
 }
 
@@ -287,8 +290,9 @@ struct NewEpisodesView: View {
 
 // MARK: - 1回の行
 
-/// 1回: アートワーク／題名（2行）／番組 · 日付 · 長さ（途中なら残り）／ダウンロードとキューの印。
-/// タップで再生、右の ＋ でキューの先頭／末尾へ（長押しでも同じメニュー）
+/// 1回: アートワーク／題名（2行）／番組 · 日付 · 長さ（途中なら残り・聴き終えたら印と薄い文字）／ダウンロードとキューの印。
+/// タップで詳細ページ（再生はしない）・アートワークのタップで番組の画面・右の ＋ でキューの先頭／末尾へ（長押しでも同じメニュー）。
+/// キューの中の行は右端に並べ替えの取っ手が来るので ＋ を出さない（キューの操作は長押しか詳細ページ）
 struct EpisodeRow: View {
     @State private var store = PodcastStore.shared
     let episode: Episode
@@ -300,42 +304,74 @@ struct EpisodeRow: View {
         HStack(alignment: .top, spacing: 12) {
             if showArtwork {
                 ArtworkView(url: episode.artworkURL, fallback: episode.feedTitle, size: 52)
+                    .opacity(played ? 0.5 : 1)
+                    .contentShape(Rectangle())
+                    .onTapGesture { PodcastRouter.shared.openShow(feedId: episode.feedId) }
+                    .accessibilityElement()
+                    .accessibilityLabel("\(episode.feedTitle)の番組を開く")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { PodcastRouter.shared.openShow(feedId: episode.feedId) }
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(episode.title)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(isCurrent ? Theme.accent : Color.primary)
+                    .foregroundStyle(isCurrent ? Theme.accent : played ? Color.secondary : Color.primary)
                     .lineLimit(2)
                 HStack(spacing: 6) {
-                    Text(meta).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    if played {
+                        Image(systemName: "checkmark.circle.fill").font(.caption2).foregroundStyle(Theme.readGreen)
+                            .accessibilityLabel("聴き終えた")
+                    }
+                    Text(meta).font(.caption).foregroundStyle(played ? .tertiary : .secondary).lineLimit(1)
                     statusIcon
+                }
+                if let f = progressFraction {
+                    ProgressView(value: f)
+                        .progressViewStyle(.linear)
+                        .tint(Theme.accent)
+                        .frame(maxWidth: 120)
+                        .accessibilityLabel("途中まで聴いた")
                 }
             }
             Spacer(minLength: 0)
-            AddToQueueMenu(episode: episode, inQueue: inQueue) {
-                Image(systemName: store.state.book.contains(episode.id) ? "text.badge.checkmark" : "text.badge.plus")
-                    .font(.body)
-                    .foregroundStyle(store.state.book.contains(episode.id) ? Theme.readGreen : Theme.accent)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Rectangle())
+            if inQueue == nil {
+                AddToQueueMenu(episode: episode, inQueue: inQueue) {
+                    Image(systemName: store.state.book.contains(episode.id) ? "text.badge.checkmark" : "text.badge.plus")
+                        .font(.body)
+                        .foregroundStyle(store.state.book.contains(episode.id) ? Theme.readGreen : Theme.accent)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("キューに入れる")
             }
-            .accessibilityLabel("キューに入れる")
         }
         .contentShape(Rectangle())
-        .onTapGesture { store.play(episode) }
+        .onTapGesture { PodcastRouter.shared.openEpisode(episode) }
         .contextMenu {
             QueueMenuItems(episode: episode, store: store)
         }
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("episodeRow")
     }
 
     private var isCurrent: Bool { store.nowPlaying?.id == episode.id }
+    private var played: Bool { store.isPlayed(episode.id) }
+
+    /// 途中まで聴いた回の進み具合（0〜1）。聴いていない・聴き終えた回は nil
+    private var progressFraction: Double? {
+        guard !played, let d = episode.durationSec, d > 0 else { return nil }
+        let pos = isCurrent ? store.currentTime : (store.position(of: episode.id) ?? 0)
+        guard pos > 1 else { return nil }
+        return min(1, pos / Double(d))
+    }
 
     private var meta: String {
         var parts: [String] = []
         if inQueue != nil || showArtwork { parts.append(episode.feedTitle) }
         parts.append(When.relative(episode.publishedAt ?? episode.sortAt))
-        if let pos = store.position(of: episode.id), pos > 1, let d = episode.durationSec, d > 0 {
+        if played {
+            parts.append("聴き終えた")
+        } else if let pos = store.position(of: episode.id), pos > 1, let d = episode.durationSec, d > 0 {
             parts.append("残り\(Duration.label(max(0, d - Int(pos))))")
         } else if let d = episode.durationSec {
             parts.append(Duration.label(d))
@@ -396,6 +432,11 @@ struct QueueMenuItems: View {
             Button(role: .destructive) { store.remove(episode.id) } label: {
                 SwiftUI.Label("キューから外す", systemImage: "minus.circle")
             }
+        }
+        if store.isPlayed(episode.id) {
+            Button { store.markUnplayed(episode.id) } label: { SwiftUI.Label("未再生に戻す", systemImage: "arrow.uturn.backward.circle") }
+        } else {
+            Button { store.markPlayed(episode) } label: { SwiftUI.Label("聴き終えたにする", systemImage: "checkmark.circle") }
         }
         if let u = episode.url.flatMap(URL.init(string:)) {
             ShareLink(item: u) { SwiftUI.Label("共有", systemImage: "square.and.arrow.up") }
