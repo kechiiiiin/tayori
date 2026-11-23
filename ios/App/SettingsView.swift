@@ -16,6 +16,7 @@ struct SettingsView: View {
                         .font(.footnote)
                 }
             }
+            if !firstRun { NotificationSection() }
             Section("つなぎ先") {
                 Text(ServerConfig.baseURL?.absoluteString ?? "（未設定）").font(.footnote.monospaced())
                 if let hint = AccessTokenStore.hint {
@@ -47,5 +48,28 @@ struct SettingsView: View {
         saved = true
         model.refreshConfigured()
         Task { await model.reload() }
+    }
+}
+
+/// 通知: 「メイン」の新着をプッシュで知らせるか
+private struct NotificationSection: View {
+    @State private var push = PushManager.shared
+
+    var body: some View {
+        Section {
+            Toggle("「メイン」の新着を通知", isOn: Binding(get: { push.enabled }, set: { on in Task { await push.setEnabled(on) } }))
+            if push.enabled && push.authorization == .denied {
+                Text("通知が許可されていません。設定アプリの「便り」→「通知」で許可してください。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if let e = push.lastError {
+                Text("登録できませんでした（\(e)）").font(.footnote).foregroundStyle(Theme.error)
+            }
+        } header: {
+            Text("通知")
+        } footer: {
+            Text("カテゴリ「メイン」のサイトに新しい記事が入ったら知らせます（1日以上前の記事は知らせません・1サイト3件まで）。")
+        }
+        .task { await push.refreshAuthorization() }
     }
 }

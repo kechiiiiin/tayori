@@ -168,6 +168,19 @@ final class AppModel {
         presented = item
     }
 
+    /// 通知をタップした: その記事を取ってアプリ内 Safari で開く（URL が無ければ一覧で指す）
+    func openItem(id: Int) async {
+        refreshConfigured()
+        guard isConfigured else { return }
+        do {
+            let item = try await api.item(id)
+            if presented != nil { return } // もう何か開いている
+            open(item)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     /// アプリ内 Safari を閉じた（＝戻ってきた）
     func returned(from item: Item) {
         lastOpened = items.first { $0.id == item.id } ?? item

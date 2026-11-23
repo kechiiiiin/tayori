@@ -66,6 +66,8 @@ struct RootView: View {
         .task {
             await model.reload()
             await applyDemo()
+            // 通知: 許可を求めて端末を登録し、起動前にタップされた通知の記事があれば開く（Push.swift）
+            await PushManager.shared.attach(model)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.reload() } }

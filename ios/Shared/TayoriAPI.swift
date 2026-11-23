@@ -109,6 +109,11 @@ final class TayoriAPI: @unchecked Sendable {
         return try await call("GET", "/api/items", query: q)
     }
 
+    func item(_ id: Int) async throws -> Item {
+        let r: ItemEnvelope = try await call("GET", "/api/items/\(id)")
+        return r.item
+    }
+
     func setRead(_ id: Int, _ read: Bool) async throws -> Item {
         let r: ItemEnvelope = try await call(read ? "POST" : "DELETE", "/api/items/\(id)/read")
         return r.item
@@ -160,6 +165,17 @@ final class TayoriAPI: @unchecked Sendable {
     func refreshFeed(_ id: Int) async throws -> Feed {
         let r: FeedEnvelope = try await call("POST", "/api/feeds/\(id)/refresh")
         return r.feed
+    }
+
+    // MARK: - プッシュ通知の端末
+
+    /// environment: "development"（開発署名）か "production"（TestFlight・App Store）
+    func registerDevice(token: String, environment: String) async throws {
+        _ = try await raw("PUT", "/api/devices", query: [], body: ["token": token, "environment": environment])
+    }
+
+    func unregisterDevice(token: String) async throws {
+        _ = try await raw("DELETE", "/api/devices/\(token)", query: [], body: nil)
     }
 
     // MARK: - 下まわり

@@ -97,6 +97,7 @@ bash scripts/setup-access.sh
 2. Access アプリ「tayori」（Self-hosted）で `tayori.kechiiiiin.com` を守る
 3. ポリシーを「Service Auth でこのトークンだけ」にする
 4. Worker の secret `CF_ACCESS_AUD`・`ACCESS_SERVICE_CLIENT_IDS` を入れる
+5. 「メイン」の新着のプッシュ: secret `APNS_KEY`（.p8 の中身）・`APNS_KEY_ID`・`APNS_TEAM_ID`（家族掲示板と同じ鍵・チームでよい）。`npx wrangler secret put APNS_KEY < AuthKey_XXXXXXXXXX.p8`。欠けていればプッシュだけ送らない。sandbox／本番は端末ごとにアプリが申告する
 
 要るもの: キーチェーン `cloudflare-admin-token`（Access 編集）・`cloudflare-deploy-token`（Workers 編集）。関所（sekisho）が同じアカウントにデプロイ済みであること（Service Binding `SEKISHO`）。
 

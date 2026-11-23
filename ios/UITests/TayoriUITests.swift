@@ -65,6 +65,42 @@ final class TayoriUITests: XCTestCase {
         attach("sites-artwork")
     }
 
+    /// 設定に通知のスイッチがある（撮って人の目で見る）
+    func testSettingsHasNotificationToggle() throws {
+        XCTAssertTrue(app.cells.firstMatch.waitForExistence(timeout: 10))
+        app.buttons["サイト"].firstMatch.tap()
+        app.buttons["カテゴリを作る・設定"].firstMatch.tap() // 右上の ＋ のメニュー
+        app.buttons.matching(NSPredicate(format: "label CONTAINS '接続の設定'")).firstMatch.tap()
+        XCTAssertTrue(app.switches.matching(NSPredicate(format: "label CONTAINS '新着を通知'")).firstMatch.waitForExistence(timeout: 5))
+        attach("settings-notification")
+    }
+
+    /// 通知: 許可 →（この間に外から `xcrun simctl push` で item_id 入りの通知を送る）→ バナーをタップ → 記事がアプリ内 Safari で開く。
+    /// 外から通知を送る段取りが要るので、TEST_RUNNER_TAYORI_PUSH_TEST=1 のときだけ走る
+    /// （例: `TEST_RUNNER_TAYORI_PUSH_TEST=1 make uitest TEST_ARGS=-only-testing:TayoriUITests/TayoriUITests/testNotificationTapOpensItem`
+    ///  を走らせ、許可が済んだら `xcrun simctl push Tayori-iPhone jp.kechiiiiin.tayori payload.json`。題は「メインのサイト」を含める）
+    func testNotificationTapOpensItem() throws {
+        guard ProcessInfo.processInfo.environment["TAYORI_PUSH_TEST"] == "1" else { throw XCTSkip("TAYORI_PUSH_TEST=1 のときだけ") }
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allow = springboard.buttons["許可"].firstMatch
+        if allow.waitForExistence(timeout: 8) { allow.tap() }
+        XCTAssertTrue(app.cells.firstMatch.waitForExistence(timeout: 10))
+        app.terminate() // ホーム画面で通知を受ける（アプリを開いていても出るが、タップで起動する道を確かめる）
+        let banner = springboard.otherElements["NotificationShortLookView"].firstMatch
+        let anyBanner = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'メインのサイト'")).firstMatch
+        XCTAssertTrue(anyBanner.waitForExistence(timeout: 60) || banner.exists, "通知が来ない")
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.name = "push-banner"
+        shot.lifetime = .keepAlways
+        add(shot)
+        // バナー（画面の上端）を押す。要素の tap は当たらないことがあるので座標で
+        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).tap()
+        sleep(5)
+        XCTAssertEqual(app.state, .runningForeground)
+        attach("push-opened")
+        XCTAssertFalse(app.cells.firstMatch.isHittable, "記事のアプリ内 Safari が開いていない")
+    }
+
     private var returnBar: XCUIElement {
         app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'さっき開いた'")).firstMatch
     }

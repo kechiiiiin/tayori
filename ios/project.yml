@@ -32,6 +32,13 @@ settings:
     DEVELOPMENT_TEAM: "${TAYORI_TEAM_ID}"
     # Worker の URL（秘密ではない）
     TAYORI_SERVER_URL: "https://tayori.kechiiiiin.com"
+  # プッシュ通知の環境（家族掲示板と同じ）。Release で archive しても、開発署名（devicectl で入れるもの）では
+  # Xcode がプロファイルに合わせて development に置き換える。App Store Connect へ出すと production
+  configs:
+    Debug:
+      APS_ENVIRONMENT: development
+    Release:
+      APS_ENVIRONMENT: production
 
 targets:
   Tayori:

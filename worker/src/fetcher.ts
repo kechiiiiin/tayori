@@ -1,5 +1,7 @@
 // フィードを取りに行く（cron・足した直後・「いますぐ」）。fetch はテストから差し替える
 import { findFeedLinks } from "./discover.ts";
+import type { ApnsSender } from "./apns.ts";
+import { pickNotices, sendNotices, type Notice } from "./notify.ts";
 import { absUrl, parseFeed, type ParsedFeed } from "./parse.ts";
 import {
   findFeedByUrl,
@@ -17,6 +19,8 @@ export interface FetchDeps {
   fetch: FetchFn;
   now: () => Date;
   timeoutMs?: number;
+  /** 「メイン」の新着を知らせる APNs の送り口。無ければ（鍵が無い・テスト）送らない */
+  push?: ApnsSender | null;
 }
 
 export const USER_AGENT = "tayori/0.1 (personal feed reader)";
@@ -82,8 +86,11 @@ function decode(buf: ArrayBuffer, contentType: string | null): string {
 
 export type RefreshResult = { status: "ok"; added: number } | { status: "not_modified"; added: 0 } | { status: "error"; error: string; added: 0 };
 
-/** 1本取りに行く。304 なら記事には触らない。失敗は last_error に残す */
-export async function refreshFeed(db: D1Database, feed: FeedRow, deps: FetchDeps): Promise<RefreshResult> {
+/**
+ * 1本取りに行く。304 なら記事には触らない。失敗は last_error に残す。
+ * notices を渡すと、知らせる新着（notify.ts の pickNotices）をそこへ足す（送るのは呼んだ側）
+ */
+export async function refreshFeed(db: D1Database, feed: FeedRow, deps: FetchDeps, notices?: Notice[]): Promise<RefreshResult> {
   const now = deps.now();
   try {
     const got = await get(deps, feed.feed_url, { etag: feed.etag, last_modified: feed.last_modified });
@@ -93,9 +100,10 @@ export async function refreshFeed(db: D1Database, feed: FeedRow, deps: FetchDeps
     }
     const parsed = parseFeed(got.body, got.url);
     if (!parsed) throw new FetchError("フィードとして読めません");
-    const added = await insertItems(db, feed.id, parsed.items, now, false);
+    const inserted = await insertItems(db, feed.id, parsed.items, now, false);
     await markFetched(db, feed.id, { etag: got.etag, last_modified: got.last_modified, site_url: parsed.site_url, image_url: parsed.image_url }, now);
-    return { status: "ok", added };
+    if (notices && inserted.length) notices.push(...(await pickNotices(db, feed.id, inserted, now)));
+    return { status: "ok", added: inserted.length };
   } catch (e) {
     const error = e instanceof FetchError ? e.message : "取得に失敗しました";
     if (!(e instanceof FetchError)) console.warn("refresh: " + (e instanceof Error ? e.name : "error"));
@@ -104,22 +112,31 @@ export async function refreshFeed(db: D1Database, feed: FeedRow, deps: FetchDeps
   }
 }
 
-/** 古い順に limit 本を取りに行く（同時に CONCURRENCY 本まで） */
+/** 古い順に limit 本を取りに行く（同時に CONCURRENCY 本まで）。終わったら「メイン」の新着を知らせる */
 export async function refreshDue(db: D1Database, deps: FetchDeps, limit: number) {
   const feeds = await staleFeeds(db, limit);
   const results: RefreshResult[] = [];
+  const notices: Notice[] = [];
   let next = 0;
   async function worker() {
     while (next < feeds.length) {
       const f = feeds[next++];
-      results.push(await refreshFeed(db, f, deps));
+      results.push(await refreshFeed(db, f, deps, notices));
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, feeds.length) }, worker));
+  let pushed = 0;
+  try {
+    pushed = (await sendNotices(db, notices, deps.push)).sent;
+  } catch (e) {
+    console.warn("notify: " + (e instanceof Error ? e.name : "error"));
+  }
   return {
     fetched: feeds.length,
     added: results.reduce((a, r) => a + r.added, 0),
     errors: results.filter((r) => r.status === "error").length,
+    notices: notices.length,
+    pushed,
   };
 }
 
@@ -127,7 +144,7 @@ export async function refreshDue(db: D1Database, deps: FetchDeps, limit: number)
 export async function runScheduled(db: D1Database, deps: FetchDeps, perRun: number) {
   const purged = await purgeOld(db, deps.now());
   const r = await refreshDue(db, deps, perRun);
-  console.log(`cron: fetched=${r.fetched} added=${r.added} errors=${r.errors} purged=${purged}`);
+  console.log(`cron: fetched=${r.fetched} added=${r.added} errors=${r.errors} purged=${purged} notices=${r.notices} pushed=${r.pushed}`);
   return { ...r, purged };
 }
 
@@ -212,6 +229,7 @@ export async function addFeed(db: D1Database, rawUrl: string, categoryId: number
     },
     now,
   );
+  // 初めての取り込みは知らせない（古い記事がまとめて入るため）
   await insertItems(db, id, parsed.items, now, true);
   return { kind: "created", id };
 }

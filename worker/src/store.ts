@@ -251,12 +251,13 @@ export async function staleFeeds(db: D1Database, limit: number): Promise<FeedRow
 /**
  * 取ってきた記事を入れる。(feed_id, guid) が items にも控え（item_tombstones）にも無いものだけ。
  * initial（初めて足したフィード）は新しい順に INITIAL_ITEMS 件だけ未読で入れ、残りは控えに回す。
- * D1 の束縛変数の上限（100）に掛からないよう、行は JSON 1つで渡して json_each で展開する
+ * D1 の束縛変数の上限（100）に掛からないよう、行は JSON 1つで渡して json_each で展開する。
+ * 戻り値は新しく入れた記事（プッシュで知らせるものを選ぶのに使う）
  */
-export async function insertItems(db: D1Database, feedId: number, items: ParsedItem[], now: Date, initial: boolean): Promise<number> {
+export async function insertItems(db: D1Database, feedId: number, items: ParsedItem[], now: Date, initial: boolean): Promise<ParsedItem[]> {
   const seen = new Set<string>();
   const unique = items.filter((i) => (seen.has(i.guid) ? false : (seen.add(i.guid), true)));
-  if (!unique.length) return 0;
+  if (!unique.length) return [];
   const known = new Set(
     (
       await db
@@ -266,7 +267,7 @@ export async function insertItems(db: D1Database, feedId: number, items: ParsedI
     ).results.map((r) => r.guid),
   );
   const fresh = unique.filter((i) => !known.has(i.guid));
-  if (!fresh.length) return 0;
+  if (!fresh.length) return [];
   const keep = initial ? newest(fresh, INITIAL_ITEMS) : fresh;
   const keepSet = new Set(keep.map((i) => i.guid));
   const skip = fresh.filter((i) => !keepSet.has(i.guid));
@@ -296,7 +297,7 @@ export async function insertItems(db: D1Database, feedId: number, items: ParsedI
     );
   }
   await db.batch(stmts);
-  return rows.length;
+  return keep;
 }
 
 const ITEM_VIEW = `SELECT i.id, i.feed_id, f.title AS feed_title, f.category_id, i.title, i.url, i.published_at, i.sort_at,

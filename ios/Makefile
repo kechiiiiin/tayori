@@ -48,7 +48,7 @@ uitest: generate
 	rm -rf build-sim/uitest.xcresult
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'platform=iOS Simulator,name=$(PHONE_SIM)' \
 	  -configuration Debug -derivedDataPath build-sim -resultBundlePath build-sim/uitest.xcresult \
-	  CODE_SIGN_IDENTITY=- test
+	  CODE_SIGN_IDENTITY=- $(TEST_ARGS) test
 
 # 起動引数で画面の状態を作って撮る（App/RootView.swift の applyDemo）。
 # $(1)=シミュレータ名 $(2)=接頭辞

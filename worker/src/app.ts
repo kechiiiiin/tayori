@@ -1,6 +1,8 @@
 // HTTP の口（Hono）。テストから時計と fetch を差し替えられるよう createApp で作る。
 import { Hono, type Context } from "hono";
-import type { AppEnv } from "./env.ts";
+import type { AppEnv, Env } from "./env.ts";
+import { apnsConfig, httpApnsSender, type ApnsSender } from "./apns.ts";
+import { deleteDevice, normalizeEnvironment, normalizeToken, sendNotices, upsertDevice, type Notice } from "./notify.ts";
 import { requireAccess } from "./auth.ts";
 import { addFeed, normalizeUrl, refreshFeed, type FetchDeps } from "./fetcher.ts";
 import {
@@ -11,6 +13,7 @@ import {
   deleteFeed,
   getFeedRow,
   getFeedView,
+  getItem,
   isState,
   listCategories,
   listFeeds,
@@ -23,11 +26,21 @@ import {
   updateCategory,
 } from "./store.ts";
 
-export type AppDeps = FetchDeps;
+export type AppDeps = FetchDeps & {
+  /** APNs の送り口を env から作る（鍵が無ければ null）。テストではモックを返す */
+  sender?: (env: Env) => ApnsSender | null;
+};
+
+/** 本番の APNs の送り口（APNS_* が揃っていなければ null） */
+export function pushSender(env: Env): ApnsSender | null {
+  const cfg = apnsConfig(env);
+  return cfg ? httpApnsSender(cfg) : null;
+}
 
 export const defaultDeps: AppDeps = {
   now: () => new Date(),
   fetch: (input, init) => fetch(input, init),
+  sender: pushSender,
 };
 
 type C = Context<AppEnv>;
@@ -91,6 +104,13 @@ export function createApp(deps: AppDeps = defaultDeps) {
     const limitQ = c.req.query("limit");
     const limit = limitQ ? parseId(limitQ) ?? undefined : undefined;
     return c.json(await listItems(c.env.DB, { state, category, feed: feed ?? undefined, before, limit }));
+  });
+
+  /** 1件（通知をタップして開くとき） */
+  app.get("/api/items/:id", async (c) => {
+    const id = parseId(c.req.param("id"));
+    const item = id === null ? null : await getItem(c.env.DB, id);
+    return item ? c.json({ item }) : err(c, 404, "not_found");
   });
 
   app.post("/api/items/:id/read", async (c) => {
@@ -185,8 +205,36 @@ export function createApp(deps: AppDeps = defaultDeps) {
     const id = parseId(c.req.param("id"));
     const row = id === null ? null : await getFeedRow(c.env.DB, id);
     if (!row) return err(c, 404, "not_found");
-    const r = await refreshFeed(c.env.DB, row, deps);
+    const notices: Notice[] = [];
+    const r = await refreshFeed(c.env.DB, row, deps, notices);
+    if (notices.length) {
+      const sender = deps.sender?.(c.env) ?? null;
+      c.executionCtx.waitUntil(
+        sendNotices(c.env.DB, notices, sender).catch((e) => console.warn("notify: " + (e instanceof Error ? e.name : "error"))),
+      );
+    }
     return c.json({ feed: await getFeedView(c.env.DB, row.id), result: r });
+  });
+
+  // ---------------- プッシュ通知の端末 ----------------
+
+  /** 登録（通知をオンにしている端末が起動のたびに送る）。environment: development | production */
+  app.put("/api/devices", async (c) => {
+    const b = await body(c);
+    const token = normalizeToken(b.token);
+    if (!token) return err(c, 400, "bad_token");
+    const environment = normalizeEnvironment(b.environment);
+    if (!environment) return err(c, 400, "bad_environment");
+    await upsertDevice(c.env.DB, token, environment, deps.now());
+    return c.json({ ok: true });
+  });
+
+  /** 外す（通知をオフにした） */
+  app.delete("/api/devices/:token", async (c) => {
+    const token = normalizeToken(c.req.param("token"));
+    if (!token) return err(c, 400, "bad_token");
+    await deleteDevice(c.env.DB, token);
+    return c.json({ ok: true });
   });
 
   app.notFound((c) => c.json({ error: "not_found" }, 404));
