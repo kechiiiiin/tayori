@@ -14,6 +14,8 @@ export interface ParsedItem {
   enclosure_type?: string | null;
   /** 長さ（秒・itunes:duration か JSON Feed の duration_in_seconds）。無ければ null */
   duration_sec?: number | null;
+  /** 回の説明（ショーノート・HTML のまま・DESCRIPTION_MAX_BYTES で切る）。添付のある回だけ持つ。無ければ null */
+  description?: string | null;
 }
 
 export interface ParsedFeed {
@@ -108,14 +110,48 @@ interface Enclosure {
 }
 const NO_ENCLOSURE: Enclosure = { enclosure_url: null, enclosure_type: null, duration_sec: null };
 
-function item(guid: string, url: string | null, title: string, published: string, enc: Enclosure = NO_ENCLOSURE): ParsedItem | null {
+/** 回の説明の上限（UTF-8 で 50KB）。超えた分は切る */
+export const DESCRIPTION_MAX_BYTES = 50 * 1024;
+
+/**
+ * 説明を保存できる形に。空なら null。上限を超えたら UTF-8 の文字の切れ目で切り、
+ * 末尾に残った書きかけのタグ（"<a hre"）・実体参照（"&am"）は落とす
+ */
+export function clipDescription(v: string | null | undefined): string | null {
+  const s = (v ?? "").trim();
+  if (!s) return null;
+  const bytes = new TextEncoder().encode(s);
+  if (bytes.length <= DESCRIPTION_MAX_BYTES) return s;
+  let end = DESCRIPTION_MAX_BYTES;
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--; // 文字の途中で切らない
+  const cut = new TextDecoder().decode(bytes.subarray(0, end));
+  return cut.replace(/<[^>]*$/, "").replace(/&#?\w*$/, "").trimEnd() || null;
+}
+
+/** 候補を順に見て、最初に中身のあるもの（content:encoded → description → itunes:summary など） */
+function firstText(...vs: Node[]): string | null {
+  for (const v of vs) {
+    const t = text(v).trim();
+    if (t) return clipDescription(t);
+  }
+  return null;
+}
+
+function item(
+  guid: string,
+  url: string | null,
+  title: string,
+  published: string,
+  enc: Enclosure = NO_ENCLOSURE,
+  description: string | null = null,
+): ParsedItem | null {
   const t = cleanTitle(title);
   // 記事の URL が無いエピソードは音声の URL を鍵に（guid も link も無い配信がある）
   const key = guid.trim() || url || enc.enclosure_url || t;
   if (!key) return null;
   const base = { guid: key.slice(0, 1000), url, title: t || url || "（無題）", published_at: toIso(published) };
   // 添付の無い記事は今までと同じ形のまま
-  return enc.enclosure_url ? { ...base, ...enc } : base;
+  return enc.enclosure_url ? { ...base, ...enc, description } : base;
 }
 
 /** itunes:duration（"3725"・"62:05"・"1:02:05"）を秒に。読めなければ null */
@@ -202,7 +238,9 @@ function parseRss(channel: Record<string, unknown>, items: Node[], base: string,
     const i = raw as Record<string, unknown>;
     const link = atomLink(i["link"], base) ?? absUrl(text(i["link"]), base);
     const guid = text(i["guid"]) || (typeof i["@_rdf:about"] === "string" ? (i["@_rdf:about"] as string) : "");
-    const it = item(guid, link, text(i["title"]), text(i["pubDate"]) || text(i["dc:date"]) || text(i["published"]), rssEnclosure(i, base));
+    const enc = rssEnclosure(i, base);
+    const desc = enc.enclosure_url ? firstText(i["content:encoded"], i["description"], i["itunes:summary"]) : null;
+    const it = item(guid, link, text(i["title"]), text(i["pubDate"]) || text(i["dc:date"]) || text(i["published"]), enc, desc);
     if (it) out.push(it);
   }
   return {
@@ -221,7 +259,9 @@ function parseAtom(feed: Record<string, unknown>, base: string): ParsedFeed {
     if (!raw || typeof raw !== "object") continue;
     const e = raw as Record<string, unknown>;
     const link = atomLink(e["link"], base);
-    const it = item(text(e["id"]), link, text(e["title"]), text(e["published"]) || text(e["updated"]), atomEnclosure(e["link"], base));
+    const enc = atomEnclosure(e["link"], base);
+    const desc = enc.enclosure_url ? firstText(e["content"], e["summary"]) : null;
+    const it = item(text(e["id"]), link, text(e["title"]), text(e["published"]) || text(e["updated"]), enc, desc);
     if (it) out.push(it);
   }
   return { kind: "atom", title: cleanTitle(text(feed["title"])), site_url: atomLink(feed["link"], base), image_url: null, items: out };
@@ -255,7 +295,8 @@ function parseJsonFeed(body: string, base: string): ParsedFeed | null {
     );
     const att = enc ? atts.find((a) => absUrl(typeof a?.url === "string" ? a.url : null, base) === enc.url) : undefined;
     const dur = typeof att?.duration_in_seconds === "number" && att.duration_in_seconds > 0 ? Math.round(att.duration_in_seconds) : null;
-    const it = item(id, url, title, pub, enc ? { enclosure_url: enc.url, enclosure_type: enc.type, duration_sec: dur } : NO_ENCLOSURE);
+    const desc = enc ? firstText(i.content_html, i.content_text, i.summary) : null;
+    const it = item(id, url, title, pub, enc ? { enclosure_url: enc.url, enclosure_type: enc.type, duration_sec: dur } : NO_ENCLOSURE, desc);
     if (it) out.push(it);
   }
   return {

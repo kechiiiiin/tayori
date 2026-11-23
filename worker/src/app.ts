@@ -5,7 +5,7 @@ import { apnsConfig, httpApnsSender, type ApnsSender } from "./apns.ts";
 import { deleteDevice, normalizeEnvironment, normalizeToken, sendNotices, upsertDevice, type Notice } from "./notify.ts";
 import { requireAccess } from "./auth.ts";
 import { addFeed, normalizeUrl, refreshFeed, type FetchDeps } from "./fetcher.ts";
-import { getPodcast, listEpisodes, listPodcasts } from "./podcast.ts";
+import { getEpisode, getPodcast, listEpisodes, listPodcasts } from "./podcast.ts";
 import {
   categoryExists,
   createCategory,
@@ -296,6 +296,13 @@ export function createApp(deps: AppDeps = defaultDeps) {
     const q = episodeQuery(c);
     if (typeof q === "string") return err(c, 400, q);
     return c.json(await listEpisodes(c.env.DB, q));
+  });
+
+  /** 1回の詳細（説明＝ショーノートの HTML つき・一覧には載せない） */
+  app.get("/api/episodes/:id", async (c) => {
+    const id = parseId(c.req.param("id"));
+    const episode = id === null ? null : await getEpisode(c.env.DB, id);
+    return episode ? c.json({ episode }) : err(c, 404, "not_found");
   });
 
   // ---------------- プッシュ通知の端末 ----------------

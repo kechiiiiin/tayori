@@ -42,6 +42,11 @@ export interface EpisodeView {
   duration_sec: number | null;
 }
 
+/** 回の詳細（GET /api/episodes/:id）。一覧には重いので載せない説明（HTML のまま）を足す */
+export interface EpisodeDetail extends EpisodeView {
+  description: string | null;
+}
+
 type EpisodeRow = {
   guid: string;
   url: string | null;
@@ -51,6 +56,7 @@ type EpisodeRow = {
   enclosure_url: string;
   enclosure_type: string | null;
   duration_sec: number | null;
+  description: string | null;
 };
 
 function chunks<T>(xs: T[], n: number): T[][] {
@@ -61,7 +67,8 @@ function chunks<T>(xs: T[], n: number): T[][] {
 
 /**
  * 取ってきた回を入れる。音声のある回を上限なしに全部。フィードから消えた回は消さない。
- * もうある回は書き込まない（音声・長さ・題名・URL が変わった回だけ書き換える）。
+ * もうある回は書き込まない（音声・長さ・題名・URL が変わった回と、説明がまだ NULL で今回は説明のある回だけ書き換える）。
+ * 説明の中身の変化は見ない（毎回 50KB×回数を読み比べないため）。
  * 新しい回は古い順に入れる（id が配信順に増える）。戻り値は新しく入った回の数
  */
 export async function upsertEpisodes(db: D1Database, feedId: number, items: ParsedItem[], now: Date): Promise<number> {
@@ -80,15 +87,18 @@ export async function upsertEpisodes(db: D1Database, feedId: number, items: Pars
       enclosure_url: i.enclosure_url,
       enclosure_type: i.enclosure_type ?? null,
       duration_sec: i.duration_sec ?? null,
+      description: i.description ?? null,
     });
   }
   if (!rows.length) return 0;
   const known = new Map(
     (
       await db
-        .prepare("SELECT guid, url, title, enclosure_url, enclosure_type, duration_sec FROM episodes WHERE feed_id = ?")
+        .prepare(
+          "SELECT guid, url, title, enclosure_url, enclosure_type, duration_sec, description IS NULL AS no_description FROM episodes WHERE feed_id = ?",
+        )
         .bind(feedId)
-        .all<Omit<EpisodeRow, "published_at" | "sort_at">>()
+        .all<Omit<EpisodeRow, "published_at" | "sort_at" | "description"> & { no_description: number }>()
     ).results.map((r) => [r.guid, r]),
   );
   const fresh = rows.filter((r) => !known.has(r.guid)).sort((x, y) => (x.sort_at < y.sort_at ? -1 : x.sort_at > y.sort_at ? 1 : 0));
@@ -100,7 +110,8 @@ export async function upsertEpisodes(db: D1Database, feedId: number, items: Pars
         k.enclosure_type !== r.enclosure_type ||
         k.title !== r.title ||
         k.url !== r.url ||
-        (r.duration_sec !== null && Number(k.duration_sec) !== r.duration_sec))
+        (r.duration_sec !== null && Number(k.duration_sec) !== r.duration_sec) ||
+        (r.description !== null && Number(k.no_description) === 1))
     );
   });
   const stmts: D1PreparedStatement[] = [];
@@ -108,10 +119,11 @@ export async function upsertEpisodes(db: D1Database, feedId: number, items: Pars
     stmts.push(
       db
         .prepare(
-          `INSERT OR IGNORE INTO episodes (feed_id, guid, url, title, published_at, fetched_at, sort_at, enclosure_url, enclosure_type, duration_sec)
+          `INSERT OR IGNORE INTO episodes (feed_id, guid, url, title, published_at, fetched_at, sort_at, enclosure_url, enclosure_type, duration_sec, description)
            SELECT ?1, json_extract(value, '$.guid'), json_extract(value, '$.url'), json_extract(value, '$.title'),
                   json_extract(value, '$.published_at'), ?2, json_extract(value, '$.sort_at'),
-                  json_extract(value, '$.enclosure_url'), json_extract(value, '$.enclosure_type'), json_extract(value, '$.duration_sec')
+                  json_extract(value, '$.enclosure_url'), json_extract(value, '$.enclosure_type'), json_extract(value, '$.duration_sec'),
+                  json_extract(value, '$.description')
              FROM json_each(?3) ORDER BY key`,
         )
         .bind(feedId, at, JSON.stringify(part)),
@@ -126,10 +138,11 @@ export async function upsertEpisodes(db: D1Database, feedId: number, items: Pars
                   enclosure_type = j.enclosure_type,
                   duration_sec = COALESCE(j.duration_sec, episodes.duration_sec),
                   title = j.title,
-                  url = j.url
+                  url = j.url,
+                  description = COALESCE(j.description, episodes.description)
              FROM (SELECT json_extract(value, '$.guid') AS guid, json_extract(value, '$.url') AS url, json_extract(value, '$.title') AS title,
                           json_extract(value, '$.enclosure_url') AS enclosure_url, json_extract(value, '$.enclosure_type') AS enclosure_type,
-                          json_extract(value, '$.duration_sec') AS duration_sec
+                          json_extract(value, '$.duration_sec') AS duration_sec, json_extract(value, '$.description') AS description
                      FROM json_each(?2)) AS j
             WHERE episodes.feed_id = ?1 AND episodes.guid = j.guid`,
         )
@@ -183,6 +196,14 @@ export async function getPodcast(db: D1Database, id: number): Promise<PodcastVie
 const EPISODE_VIEW = `SELECT e.id, e.feed_id, f.title AS feed_title, f.image_url AS feed_image_url, e.title, e.url,
        e.published_at, e.sort_at, e.enclosure_url, e.enclosure_type, e.duration_sec
   FROM episodes e JOIN feeds f ON f.id = e.feed_id`;
+
+/** 1回の詳細（説明つき）。無ければ null */
+export async function getEpisode(db: D1Database, id: number): Promise<EpisodeDetail | null> {
+  const sql = `SELECT e.id, e.feed_id, f.title AS feed_title, f.image_url AS feed_image_url, e.title, e.url,
+       e.published_at, e.sort_at, e.enclosure_url, e.enclosure_type, e.duration_sec, e.description
+  FROM episodes e JOIN feeds f ON f.id = e.feed_id WHERE e.id = ?`;
+  return (await db.prepare(sql).bind(id).first<EpisodeDetail>()) ?? null;
+}
 
 /**
  * エピソード一覧。

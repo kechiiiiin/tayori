@@ -417,7 +417,8 @@ test("移行 SQL 0006: 番組の回を id ごと episodes へ・コメントの�
   // 2 回目: 同じ
   raw.exec(sql);
   assert.deepEqual(snapshot(raw), after);
-  // これから入る回の id は、items でこれまでに配った id（上限で消えた 900）より大きい
+  // これから入る回の id は、items でこれまでに配った id（上限で消えた 900）より大きい（取得は 0007 の列を使うので当ててから）
+  raw.exec(readFileSync("migrations/0007_episode_description.sql", "utf8"));
   const parsed = parseFeed(podcastWith(3, { prefix: "p2" }), "https://p2.example/rss")!;
   await upsertEpisodes(db, 3, parsed.items, new Date("2026-11-21T00:00:00Z"));
   const fresh = plain(raw.prepare("SELECT id, guid FROM episodes WHERE feed_id = 3 AND guid != 'p2-1' ORDER BY id").all());
