@@ -78,7 +78,7 @@ private final class NoRedirect: NSObject, URLSessionTaskDelegate {
     }
 }
 
-/// 便りの Worker を叩く（アプリと共有拡張で共通）
+/// 音沙汰の Worker を叩く（アプリと共有拡張で共通）
 final class TayoriAPI: @unchecked Sendable {
     static let shared = TayoriAPI()
 
@@ -199,7 +199,7 @@ final class TayoriAPI: @unchecked Sendable {
         return r.episode.description
     }
 
-    /// iTunes Search API で番組を名前で探す（便りの Worker は通さない・認証なし）
+    /// iTunes Search API で番組を名前で探す（音沙汰の Worker は通さない・認証なし）
     func searchPodcasts(_ term: String) async throws -> [PodcastSearchResult] {
         var c = URLComponents(string: "https://itunes.apple.com/search")!
         c.queryItems = [

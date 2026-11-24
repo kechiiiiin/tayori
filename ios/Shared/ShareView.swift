@@ -26,7 +26,7 @@ struct ShareView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("便りに追加").font(.headline)
+                Text("音沙汰に追加").font(.headline)
                 Spacer()
                 Button(isDone ? "閉じる" : "やめる", action: onClose)
             }

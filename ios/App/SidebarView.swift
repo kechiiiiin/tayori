@@ -48,7 +48,7 @@ struct SidebarView: View {
                 }
             }
         }
-        .navigationTitle("便り")
+        .navigationTitle("音沙汰")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showSites = true } label: { Image(systemName: "plus") }

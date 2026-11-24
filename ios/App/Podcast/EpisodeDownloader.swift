@@ -6,7 +6,7 @@ let downloadLog = Logger(subsystem: "jp.kechiiiiin.tayori", category: "downloads
 /// キューに入った回の音声を、バックグラウンドの URLSession で端末へ落とす。
 /// - 置き場は Application Support/Episodes/<エピソード id>.<拡張子>（iCloud バックアップから外す）
 /// - 既定は Wi-Fi のときだけ（URLRequest.allowsCellularAccess / allowsExpensiveNetworkAccess を設定に合わせる）
-/// - 音声は配信元から直接取る（便りの Worker は通さない）
+/// - 音声は配信元から直接取る（音沙汰の Worker は通さない）
 final class EpisodeDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     static let shared = EpisodeDownloader()
     static let sessionIdentifier = "jp.kechiiiiin.tayori.episodes"

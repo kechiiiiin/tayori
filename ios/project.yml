@@ -1,6 +1,6 @@
 name: tayori
 
-# 便り（tayori）iOS（設計: jinsei vault hestia/projects/RSSフィーダー設計.md）
+# 音沙汰（旧 便り・tayori）iOS（設計: jinsei vault hestia/projects/RSSフィーダー設計.md）
 # `*.xcodeproj` は生成物でコミットしない。必ず `xcodegen generate`（make generate）が先
 # iPhone と iPad の両方（TARGETED_DEVICE_FAMILY 1,2）。iPad は全方向の向きを Info.plist に入れてある
 # （家族掲示板は iPad の向きの要件で App Store Connect への upload が弾かれた）

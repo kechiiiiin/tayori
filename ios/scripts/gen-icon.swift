@@ -1,5 +1,5 @@
 // アプリアイコン（1024px）を描く: `swift scripts/gen-icon.swift App/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`
-// 便り = 封筒。モックのアクセント色（#c2552d）の地に白い封筒と、未読の丸
+// 音沙汰 = 四方から寄せる波が、真ん中の一点（手元）に届く形。モックのアクセント色（#c2552d）の地に、外の半透明の弧→内の白い弧→黄色い点
 import AppKit
 
 let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "AppIcon-1024.png"
@@ -11,27 +11,28 @@ NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
 let rect = NSRect(x: 0, y: 0, width: size, height: size)
 NSGradient(starting: NSColor(red: 0.84, green: 0.40, blue: 0.24, alpha: 1), ending: NSColor(red: 0.70, green: 0.30, blue: 0.16, alpha: 1))!
     .draw(in: rect, angle: -90)
-// 封筒
-let env = NSRect(x: 192, y: 262, width: 640, height: 460)
-let body = NSBezierPath(roundedRect: env, xRadius: 44, yRadius: 44)
-NSColor(white: 1, alpha: 0.97).setFill()
-body.fill()
-let flap = NSBezierPath()
-flap.move(to: NSPoint(x: env.minX + 30, y: env.maxY - 24))
-flap.line(to: NSPoint(x: env.midX, y: env.midY - 10))
-flap.line(to: NSPoint(x: env.maxX - 30, y: env.maxY - 24))
-flap.lineWidth = 30
-flap.lineCapStyle = .round
-flap.lineJoinStyle = .round
-NSColor(red: 0.76, green: 0.33, blue: 0.18, alpha: 0.9).setStroke()
-flap.stroke()
-// 未読の丸
-let dot = NSBezierPath(ovalIn: NSRect(x: 700, y: 640, width: 170, height: 170))
+// 下書き（140×140・上が y=0）の座標を 1024px（下が y=0）へ
+let k = CGFloat(size) / 140
+func pt(_ x: CGFloat, _ y: CGFloat) -> NSPoint { NSPoint(x: x * k, y: CGFloat(size) - y * k) }
+let center = pt(70, 70)
+// 四方（斜め4方向）から寄せる弧。方向は AppKit の角度（上が正）
+let diagonals: [CGFloat] = [135, 45, -45, -135]
+func ring(radius: CGFloat, half: CGFloat, alpha: CGFloat) {
+    NSColor(white: 1, alpha: alpha).setStroke()
+    for d in diagonals {
+        let arc = NSBezierPath()
+        arc.appendArc(withCenter: center, radius: radius * k, startAngle: d - half, endAngle: d + half, clockwise: false)
+        arc.lineWidth = 7 * k
+        arc.lineCapStyle = .round
+        arc.stroke()
+    }
+}
+ring(radius: 44, half: 16.8, alpha: 0.5)   // 外側（半透明）
+ring(radius: 26, half: 19.0, alpha: 0.97)  // 内側（白）
+// 真ん中の一点（手元）
+let r = 11 * k
 NSColor(red: 0.96, green: 0.85, blue: 0.55, alpha: 1).setFill()
-dot.fill()
-NSColor.white.setStroke()
-dot.lineWidth = 22
-dot.stroke()
+NSBezierPath(ovalIn: NSRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)).fill()
 NSGraphicsContext.restoreGraphicsState()
 try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: out))
 print("wrote \(out)")

@@ -12,7 +12,7 @@ struct SettingsView: View {
         Form {
             if firstRun {
                 Section {
-                    Text("便りの Worker につなぐサービストークンが入っていません。TestFlight のビルドには埋め込まれています。手で入れるときは下に貼ってください。")
+                    Text("音沙汰の Worker につなぐサービストークンが入っていません。TestFlight のビルドには埋め込まれています。手で入れるときは下に貼ってください。")
                         .font(.footnote)
                 }
             }
@@ -59,7 +59,7 @@ private struct NotificationSection: View {
         Section {
             Toggle("「メイン」の新着を通知", isOn: Binding(get: { push.enabled }, set: { on in Task { await push.setEnabled(on) } }))
             if push.enabled && push.authorization == .denied {
-                Text("通知が許可されていません。設定アプリの「便り」→「通知」で許可してください。")
+                Text("通知が許可されていません。設定アプリの「音沙汰」→「通知」で許可してください。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if let e = push.lastError {

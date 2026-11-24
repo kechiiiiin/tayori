@@ -1,4 +1,4 @@
-# 便り（tayori）iOS — よく使う手順
+# 音沙汰（旧 便り・tayori）iOS — よく使う手順
 #
 #   make generate   xcodegen で .xcodeproj を作る（生成物はコミットしない）
 #   make sim        シミュレータ向けにビルドだけ通す（Team ID 不要・アドホック署名）
