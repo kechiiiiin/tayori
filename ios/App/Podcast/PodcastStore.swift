@@ -376,7 +376,6 @@ final class PodcastStore {
         var seen = Set<Int>()
         for e in episodes where seen.insert(e.id).inserted && !downloaded.contains(e.id) && active[e.id] == nil {
             downloadErrors[e.id] = nil
-            progress[e.id] = 0
             EpisodeDownloader.shared.start(e, allowCellular: state.allowCellular)
         }
     }
