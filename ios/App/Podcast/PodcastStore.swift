@@ -85,6 +85,8 @@ final class PodcastStore {
     private var readyObservation: NSKeyValueObservation?
     private var lastSavedAt = Date.distantPast
     private var configured = false
+    /// 読み込み失敗で1回作り直した回の id（無限ループにしないため、次の load で消す）
+    private var reloadedOnFailure: Set<Int> = []
     /// DEBUG の UI テスト用: 回を読み込むたびに末尾の N 秒前へ飛ぶ（キューの連鎖を短い時間で確かめる）
     private var debugSeekNearEnd: Double?
 
@@ -365,7 +367,13 @@ final class PodcastStore {
             self.downloadErrors[id] = nil
             self.downloaded.insert(id)
             // もう要らなくなっていたら消す
-            if !self.wanted.contains(id) { EpisodeDownloader.deleteFile(for: id); self.downloaded.remove(id) }
+            if !self.wanted.contains(id) {
+                EpisodeDownloader.deleteFile(for: id)
+                self.downloaded.remove(id)
+            } else if let ep = self.state.nowPlaying, ep.id == id, !self.isPlaying, self.needsReload(for: ep) {
+                // 止まっている nowPlaying がリモート／失敗した item のままだった: ダウンロードできたローカルへ作り直す（位置は保つ・自動再生しない）
+                self.load(ep, autoplay: false)
+            }
         }
         d.onFailed = { [weak self] id, msg in
             self?.progress[id] = nil
@@ -433,7 +441,7 @@ final class PodcastStore {
                 finishCurrent(advance: false)
             }
         }
-        if state.nowPlaying?.id == episode.id, player.currentItem != nil {
+        if state.nowPlaying?.id == episode.id, !needsReload(for: episode) {
             resume()
             return
         }
@@ -448,28 +456,65 @@ final class PodcastStore {
         Task { await reconcileDownloads() }
     }
 
+    /// 今の item を作り直すべきか: 無い・失敗した・（ローカルがあるのにリモートのままで再生中でない）
+    private func needsReload(for episode: Episode) -> Bool {
+        guard let item = player.currentItem else { return true }
+        if item.status == .failed || player.status == .failed { return true }
+        if let local = EpisodeDownloader.localFile(for: episode.id),
+           (item.asset as? AVURLAsset)?.url != local, !isPlaying {
+            return true
+        }
+        return false
+    }
+
     private func load(_ episode: Episode, autoplay: Bool) {
         let local = EpisodeDownloader.localFile(for: episode.id)
         guard let url = local ?? episode.audioURL else { return }
-        let item = AVPlayerItem(url: url)
-        item.audioTimePitchAlgorithm = .timeDomain
-        player.replaceCurrentItem(with: item)
-        player.defaultRate = Float(state.speed)
         let known = Double(episode.durationSec ?? 0)
         let saved = state.positions[episode.id] ?? 0
         // 続きから（残り30秒を切った位置なら頭から）
         let start: Double? = saved > 1 && (known == 0 || known - saved >= Self.finishThreshold) ? saved : nil
         currentTime = start ?? 0
         duration = known
+        reloadedOnFailure.remove(episode.id) // 新しく読み込み直すので、失敗時の作り直しは改めて1回だけ許す
+        setItem(url: url, for: episode, start: start, autoplay: autoplay)
+        updateNowPlayingInfo()
+        loadArtwork(for: episode)
+    }
+
+    /// item を実際に差し替えて見張りを張る（load からも、読み込み失敗の作り直しからも使う）
+    private func setItem(url: URL, for episode: Episode, start: Double?, autoplay: Bool) {
+        let item = AVPlayerItem(url: url)
+        item.audioTimePitchAlgorithm = .timeDomain
+        player.replaceCurrentItem(with: item)
+        player.defaultRate = Float(state.speed)
         observeEnd(of: item)
         // seek は読み込みが済んでから（済む前の completion つき seek は例外で落ちる）
         readyObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] it, _ in
-            guard it.status == .readyToPlay else { return }
-            Task { @MainActor in self?.itemReady(it, start: start, autoplay: autoplay) }
+            switch it.status {
+            case .readyToPlay:
+                Task { @MainActor in self?.itemReady(it, start: start, autoplay: autoplay) }
+            case .failed:
+                Task { @MainActor in self?.itemFailed(it, for: episode, start: start, autoplay: autoplay) }
+            default:
+                break
+            }
         }
         if autoplay && start == nil && debugSeekNearEnd == nil { resume() }
-        updateNowPlayingInfo()
-        loadArtwork(for: episode)
+    }
+
+    /// 読み込みに失敗した item: ログを残し、ローカル⇄リモートで作り直せるなら1回だけ試す（無限ループにしない）
+    private func itemFailed(_ item: AVPlayerItem, for episode: Episode, start: Double?, autoplay: Bool) {
+        guard player.currentItem === item else { return }
+        readyObservation = nil
+        downloadLog.error("item failed id=\(episode.id, privacy: .public) error=\(String(describing: item.error), privacy: .public)")
+        guard !reloadedOnFailure.contains(episode.id) else { return }
+        reloadedOnFailure.insert(episode.id)
+        let failedURL = (item.asset as? AVURLAsset)?.url
+        let local = EpisodeDownloader.localFile(for: episode.id)
+        let alt = failedURL == local ? episode.audioURL : local
+        guard let alt else { return }
+        setItem(url: alt, for: episode, start: start, autoplay: autoplay)
     }
 
     /// 読み込みが済んだ: 続きの位置へ飛んでから再生（DEBUG の UI テストでは末尾の N 秒前へ）
@@ -494,6 +539,10 @@ final class PodcastStore {
     }
 
     func resume() {
+        if let ep = state.nowPlaying, needsReload(for: ep) {
+            load(ep, autoplay: true)
+            return
+        }
         guard player.currentItem != nil else {
             if let ep = state.nowPlaying { load(ep, autoplay: true) }
             return
