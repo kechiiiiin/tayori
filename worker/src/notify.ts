@@ -4,8 +4,11 @@
 //   - 取得（cron・「いますぐ」）で**新しく取り込まれた**記事（初めて足したときの取り込みは鳴らさない）
 //   - published_at が取得時刻から NOTIFY_MAX_AGE_MS 以内（古い記事の一括取り込みで鳴らさない。日付の無い記事も鳴らさない）
 //   - 1回の取得で1サイト NOTIFY_MAX_PER_FEED 通まで（新しい順）、cron 1回で NOTIFY_MAX_PER_RUN 通まで
-// 1記事につき登録済みの端末それぞれへ1通。本文は「サイト名」（題）＋「記事の題名」（本文）。タップで記事を開く（item_id）
-import type { ApnsEnvironment, ApnsSender } from "./apns.ts";
+// 1記事につき登録済みで alerts=1（アプリの「通知」がオン）の端末それぞれへ1通。本文は「サイト名」（題）＋「記事の題名」（本文）。タップで記事を開く（item_id）
+//
+// もう一つ、ポッドキャストの新しい回が入った cron では、登録済みの全端末（alerts に関係なく）へサイレントプッシュ（background）を1通ずつ。
+// アプリが裏で起きて新着を取り、キューへの自動追加とダウンロードを始める（ios/App/Push.swift）
+import type { ApnsEnvironment, ApnsPushType, ApnsSender } from "./apns.ts";
 import type { ParsedItem } from "./parse.ts";
 
 export const NOTIFY_CATEGORY_NAME = "メイン";
@@ -76,6 +79,9 @@ export interface DeviceRow {
   environment: ApnsEnvironment;
 }
 
+/** サイレントプッシュの中身（新着を取りに行かせるだけ・音も表示もなし） */
+export const WAKEUP_PAYLOAD = JSON.stringify({ aps: { "content-available": 1 } });
+
 /** APNs の端末トークン（16進）。小文字にそろえる。だめなら null */
 export function normalizeToken(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
@@ -88,13 +94,20 @@ export function normalizeEnvironment(raw: unknown): ApnsEnvironment | null {
   return raw === "development" || raw === "production" ? raw : null;
 }
 
-export async function upsertDevice(db: D1Database, token: string, environment: ApnsEnvironment, now: Date): Promise<void> {
+/** alerts: 真偽（省略は true）。それ以外は null */
+export function normalizeAlerts(raw: unknown): boolean | null {
+  if (raw === undefined || raw === null) return true;
+  return typeof raw === "boolean" ? raw : null;
+}
+
+/** alerts = false はお知らせ（alert）を送らない端末（サイレントプッシュは送る） */
+export async function upsertDevice(db: D1Database, token: string, environment: ApnsEnvironment, now: Date, alerts = true): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO device_tokens (token, environment, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)
-       ON CONFLICT (token) DO UPDATE SET environment = excluded.environment, updated_at = excluded.updated_at`,
+      `INSERT INTO device_tokens (token, environment, alerts, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)
+       ON CONFLICT (token) DO UPDATE SET environment = excluded.environment, alerts = excluded.alerts, updated_at = excluded.updated_at`,
     )
-    .bind(token, environment, now.toISOString())
+    .bind(token, environment, alerts ? 1 : 0, now.toISOString())
     .run();
 }
 
@@ -103,8 +116,10 @@ export async function deleteDevice(db: D1Database, token: string): Promise<boole
   return (r.meta?.changes ?? 0) > 0;
 }
 
-export async function listDevices(db: D1Database): Promise<DeviceRow[]> {
-  return (await db.prepare("SELECT token, environment FROM device_tokens ORDER BY token").all<DeviceRow>()).results;
+/** alertsOnly = お知らせを受け取る端末（alerts=1）だけ */
+export async function listDevices(db: D1Database, opts: { alertsOnly?: boolean } = {}): Promise<DeviceRow[]> {
+  const where = opts.alertsOnly ? " WHERE alerts = 1" : "";
+  return (await db.prepare(`SELECT token, environment FROM device_tokens${where} ORDER BY token`).all<DeviceRow>()).results;
 }
 
 /** 送らなくなる応答（アプリを消した・トークンがこのアプリ／環境のものでない） */
@@ -112,30 +127,45 @@ function isDeadToken(status: number, reason: string | undefined): boolean {
   return status === 410 || reason === "BadDeviceToken" || reason === "Unregistered" || reason === "DeviceTokenNotForTopic";
 }
 
-/** 知らせを全端末へ。sender が無ければ（鍵が無い）送らない。死んだトークンは台帳から消す */
+/** 1通を端末たちへ。死んだトークンは dead に足す（送らない）。成功した数を返す */
+async function sendToDevices(sender: ApnsSender, devices: DeviceRow[], payload: string, pushType: ApnsPushType, dead: Set<string>): Promise<number> {
+  let sent = 0;
+  await Promise.all(
+    devices
+      .filter((d) => !dead.has(d.token))
+      .map(async (d) => {
+        try {
+          const r = await sender.send(d.token, d.environment, payload, pushType);
+          if (r.status >= 200 && r.status < 300) sent++;
+          else if (isDeadToken(r.status, r.reason)) dead.add(d.token);
+          else console.warn(`apns(${pushType}): ${r.status} ${r.reason ?? ""}`);
+        } catch (e) {
+          console.warn(`apns(${pushType}): ` + (e instanceof Error ? e.name : "error"));
+        }
+      }),
+  );
+  return sent;
+}
+
+/** 知らせを alerts=1 の端末へ。sender が無ければ（鍵が無い）送らない。死んだトークンは台帳から消す */
 export async function sendNotices(db: D1Database, notices: Notice[], sender: ApnsSender | null | undefined, limit = NOTIFY_MAX_PER_RUN) {
   const list = notices.slice(0, limit);
   if (!sender || !list.length) return { sent: 0, notices: list.length };
-  const devices = await listDevices(db);
+  const devices = await listDevices(db, { alertsOnly: true });
   const dead = new Set<string>();
   let sent = 0;
-  for (const n of list) {
-    const payload = noticePayload(n);
-    await Promise.all(
-      devices
-        .filter((d) => !dead.has(d.token))
-        .map(async (d) => {
-          try {
-            const r = await sender.send(d.token, d.environment, payload);
-            if (r.status >= 200 && r.status < 300) sent++;
-            else if (isDeadToken(r.status, r.reason)) dead.add(d.token);
-            else console.warn(`apns: ${r.status} ${r.reason ?? ""}`);
-          } catch (e) {
-            console.warn("apns: " + (e instanceof Error ? e.name : "error"));
-          }
-        }),
-    );
-  }
+  for (const n of list) sent += await sendToDevices(sender, devices, noticePayload(n), "alert", dead);
   for (const t of dead) await deleteDevice(db, t);
   return { sent, notices: list.length };
+}
+
+/** サイレントプッシュを登録済みの全端末へ1通ずつ（alerts に関係なく）。死んだトークンは台帳から消す */
+export async function sendWakeups(db: D1Database, sender: ApnsSender | null | undefined): Promise<number> {
+  if (!sender) return 0;
+  const devices = await listDevices(db);
+  if (!devices.length) return 0;
+  const dead = new Set<string>();
+  const sent = await sendToDevices(sender, devices, WAKEUP_PAYLOAD, "background", dead);
+  for (const t of dead) await deleteDevice(db, t);
+  return sent;
 }

@@ -91,6 +91,12 @@ docs/screenshots/  シミュレータの実画面
 - キュー・再生位置・自動追加の設定・ダウンロードは端末の中（`Application Support/podcast-state.json`・`Episodes/`）。Worker とは同期しない
 - 番組の回の一覧と新着は 30 件ずつ読み、下から 5 件目が見えたら次を読む（無限スクロール）
 - 番組の追加は名前で探す（iTunes Search API・アプリから直接）か、フィードの URL
+- **アプリを開かなくても新しい回がキューに入り、ダウンロードが始まる**（2026-11-25）:
+  - Worker の cron（30分ごと）で番組に新しい回が1つでも入ったら、その実行につき登録済みの端末それぞれへ**サイレントプッシュを1通**（`{"aps":{"content-available":1}}`・`apns-push-type: background`・`apns-priority: 5`・`worker/src/notify.ts` の `sendWakeups`）
+  - アプリは `didReceiveRemoteNotification` で起き、`PodcastStore.refresh`（自動追加 → ダウンロード開始）を走らせて 25 秒で打ち切る（`ios/App/BackgroundRefresh.swift`）。保険に BGAppRefreshTask `jp.kechiiiiin.tayori.refresh`（裏に回るたび1時間後以降で予約・いつ起こすかは iOS 次第）
+  - 端末トークンは「通知」のオンオフ・通知の許可に関係なく毎回登録する。`device_tokens.alerts`（`0008_device_alerts.sql`）= 「通知」オンかつ許可あり。記事の alert は alerts=1 の端末だけ、サイレントは全端末へ。スイッチをオフにしても DELETE せず `alerts: false` で PUT
+  - iOS がサイレントプッシュを間引く（電池・使用頻度・低電力モード・アプリを上スワイプで終了した後は届かない）ので、届かない回は次に開いたときの読み直しで入る
+  - シミュレータの `xcrun simctl push` は content-available だけの通知をアプリへ渡さない（2026-11-25 Xcode 26 で確認）。裏の流れは lldb でデリゲートを直接呼んで確かめた。BGTaskScheduler の予約もシミュレータでは失敗する（実機で確かめる）
 
 ## 開発
 

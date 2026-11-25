@@ -1,4 +1,4 @@
-// APNs へのお知らせ（alert）プッシュ。作りは家族掲示板（~/work/kazoku-keijiban/worker/src/apns.ts）と同じ:
+// APNs へのプッシュ（お知らせ＝alert と、裏でアプリを起こすサイレント＝background）。作りは家族掲示板（~/work/kazoku-keijiban/worker/src/apns.ts）と同じ:
 // - 認証は token-based（.p8 の ES256 で JWT を署名）。JWT は 20〜60 分ごとに作り直すきまりなので 50 分使い回す
 // - 送る口は ApnsSender インターフェイスに切ってあり、テストではモックを差し込む（notify.ts）
 // 家族掲示板との違い: ウィジェット用ではなく通常の通知（apns-push-type: alert・apns-topic: <bundle id>）。
@@ -14,8 +14,23 @@ export interface ApnsResult {
   reason?: string;
 }
 
+/** alert = 画面に出る通知／background = サイレントプッシュ（content-available。アプリを裏で起こして新着を取りに行かせる） */
+export type ApnsPushType = "alert" | "background";
+
 export interface ApnsSender {
-  send(deviceToken: string, environment: ApnsEnvironment, payload: string): Promise<ApnsResult>;
+  /** pushType を省くと alert */
+  send(deviceToken: string, environment: ApnsEnvironment, payload: string, pushType?: ApnsPushType): Promise<ApnsResult>;
+}
+
+/** APNs のヘッダ。background は priority 5 でなければならない（10 は拒まれる） */
+export function apnsHeaders(jwt: string, bundleId: string, pushType: ApnsPushType): Record<string, string> {
+  return {
+    authorization: `bearer ${jwt}`,
+    "apns-topic": bundleId,
+    "apns-push-type": pushType,
+    "apns-priority": pushType === "background" ? "5" : "10",
+    "content-type": "application/json",
+  };
 }
 
 export interface ApnsConfig {
@@ -86,17 +101,11 @@ async function providerToken(cfg: ApnsConfig, nowSec: number): Promise<string> {
 /** 本物の APNs へ送る口 */
 export function httpApnsSender(cfg: ApnsConfig, fetchImpl: FetchLike = fetch, now: () => number = Date.now): ApnsSender {
   return {
-    async send(deviceToken, environment, payload) {
+    async send(deviceToken, environment, payload, pushType = "alert") {
       const jwt = await providerToken(cfg, Math.floor(now() / 1000));
       const res = await fetchImpl(`https://${apnsHost(environment)}/3/device/${deviceToken}`, {
         method: "POST",
-        headers: {
-          authorization: `bearer ${jwt}`,
-          "apns-topic": cfg.bundleId,
-          "apns-push-type": "alert",
-          "apns-priority": "10",
-          "content-type": "application/json",
-        },
+        headers: apnsHeaders(jwt, cfg.bundleId, pushType),
         body: payload,
       });
       if (res.ok) return { status: res.status };

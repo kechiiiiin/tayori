@@ -224,11 +224,44 @@ final class PodcastStore {
 
     // MARK: - Worker から読む・新着の自動追加
 
-    /// 番組と新着を読み、番組の設定に従って新着をキューへ入れる
-    func refresh() async {
-        guard TayoriAPI.shared.isConfigured else { return }
+    /// refresh の結果（サイレントプッシュ・BGAppRefreshTask の完了の知らせに使う）
+    enum RefreshOutcome: Equatable {
+        /// 新着の一覧かキューが変わった
+        case newData
+        case noData
+        case failed
+    }
+
+    /// 走っている refresh（前面の読み直し・サイレントプッシュ・BGTask が重なったら同じものを待つ。二重に自動追加しない）
+    private var refreshTask: Task<RefreshOutcome, Never>?
+
+    /// 番組と新着を読み、番組の設定に従って新着をキューへ入れ、キューの回のダウンロードを始める。
+    /// 裏起動（サイレントプッシュ・BGTask）からも呼ぶ: 画面には触らず、再生も始めない
+    /// joinRunning = false: 走っているものを待ってから読み直す（番組を足した・消した直後は、その前に始まった読み込みでは足りない）
+    @discardableResult
+    func refresh(joinRunning: Bool = true) async -> RefreshOutcome {
+        if let running = refreshTask {
+            let r = await running.value
+            if joinRunning { return r }
+            if let again = refreshTask { return await again.value } // 待つあいだに別の呼び出しが始めた
+        }
+        // 終わった時点で外す（待っていた呼び出しが再開するより前に・同じ MainActor の上）
+        let t = Task { () -> RefreshOutcome in
+            let r = await performRefresh()
+            refreshTask = nil
+            return r
+        }
+        refreshTask = t
+        return await t.value
+    }
+
+    private func performRefresh() async -> RefreshOutcome {
+        guard TayoriAPI.shared.isConfigured else { return .noData }
         isLoading = true
         defer { isLoading = false }
+        let beforeQueue = state.book.allEpisodes.map(\.id)
+        let beforeNew = newEpisodes.map(\.id)
+        var failed = false
         do {
             async let pods = api.podcasts()
             async let page = api.episodes(limit: EpisodePaging.pageSize)
@@ -237,11 +270,15 @@ final class PodcastStore {
             newEpisodes = n.episodes
             newNext = n.next
             errorMessage = nil
-            await applyAutoAdd(p)
+            failed = !(await applyAutoAdd(p))
         } catch {
             errorMessage = error.localizedDescription
+            failed = true
         }
         await reconcileDownloads()
+        let changed = state.book.allEpisodes.map(\.id) != beforeQueue || newEpisodes.map(\.id) != beforeNew
+        downloadLog.info("refresh changed=\(changed, privacy: .public) failed=\(failed, privacy: .public) queue=\(self.state.book.allEpisodes.count, privacy: .public)")
+        return changed ? .newData : failed ? .failed : .noData
     }
 
     func loadMoreNew() async {
@@ -260,7 +297,9 @@ final class PodcastStore {
 
     /// 番組ごとに「見た」id より後の回を取り、設定（入れない／キューの先頭・末尾）に従って入れる。
     /// 初めて見る番組は今ある回を「見た」にするだけ（足した直後に過去回がキューへ溢れないように）
-    private func applyAutoAdd(_ pods: [Podcast]) async {
+    /// 番組ごとの読み込みに1つでも失敗したら false
+    private func applyAutoAdd(_ pods: [Podcast]) async -> Bool {
+        var ok = true
         let since = Date().addingTimeInterval(-Self.autoAddWindow)
         for p in pods {
             guard let latest = p.latestEpisodeId else { continue }
@@ -282,6 +321,7 @@ final class PodcastStore {
                     }
                 } catch {
                     errorMessage = error.localizedDescription
+                    ok = false
                     continue // 目印は進めない（次に読み直す）
                 }
                 let skip = Set(state.played.keys)
@@ -289,12 +329,13 @@ final class PodcastStore {
             }
             mutate { $0.watermarks[p.id] = latest }
         }
+        return ok
     }
 
     func addPodcast(url: String) async -> Result<AddPodcastResult, Error> {
         do {
             let r = try await api.addPodcast(url: url)
-            await refresh()
+            await refresh(joinRunning: false)
             return .success(r)
         } catch {
             return .failure(error)
@@ -311,7 +352,7 @@ final class PodcastStore {
         } catch {
             errorMessage = error.localizedDescription
         }
-        await refresh()
+        await refresh(joinRunning: false)
     }
 
     // MARK: - ダウンロード

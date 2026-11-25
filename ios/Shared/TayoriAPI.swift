@@ -226,13 +226,10 @@ final class TayoriAPI: @unchecked Sendable {
 
     // MARK: - プッシュ通知の端末
 
-    /// environment: "development"（開発署名）か "production"（TestFlight・App Store）
-    func registerDevice(token: String, environment: String) async throws {
-        _ = try await raw("PUT", "/api/devices", query: [], body: ["token": token, "environment": environment])
-    }
-
-    func unregisterDevice(token: String) async throws {
-        _ = try await raw("DELETE", "/api/devices/\(token)", query: [], body: nil)
+    /// environment: "development"（開発署名）か "production"（TestFlight・App Store）。
+    /// alerts: お知らせ（「メイン」の新着）を受け取るか。false でもサイレントプッシュ（番組の新しい回）は届く
+    func registerDevice(token: String, environment: String, alerts: Bool) async throws {
+        _ = try await raw("PUT", "/api/devices", query: [], body: ["token": token, "environment": environment, "alerts": alerts])
     }
 
     // MARK: - 下まわり

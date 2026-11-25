@@ -2,7 +2,7 @@
 import { Hono, type Context } from "hono";
 import type { AppEnv, Env } from "./env.ts";
 import { apnsConfig, httpApnsSender, type ApnsSender } from "./apns.ts";
-import { deleteDevice, normalizeEnvironment, normalizeToken, sendNotices, upsertDevice, type Notice } from "./notify.ts";
+import { deleteDevice, normalizeAlerts, normalizeEnvironment, normalizeToken, sendNotices, upsertDevice, type Notice } from "./notify.ts";
 import { requireAccess } from "./auth.ts";
 import { addFeed, normalizeUrl, refreshFeed, type FetchDeps } from "./fetcher.ts";
 import { getEpisode, getPodcast, listEpisodes, listPodcasts } from "./podcast.ts";
@@ -307,18 +307,23 @@ export function createApp(deps: AppDeps = defaultDeps) {
 
   // ---------------- プッシュ通知の端末 ----------------
 
-  /** 登録（通知をオンにしている端末が起動のたびに送る）。environment: development | production */
+  /**
+   * 登録（端末が起動のたびに送る・通知のオンオフに関係なく）。environment: development | production。
+   * alerts: お知らせ（「メイン」の新着）を受け取るか（省略は true）。false でもサイレントプッシュ（番組の新しい回）は届く
+   */
   app.put("/api/devices", async (c) => {
     const b = await body(c);
     const token = normalizeToken(b.token);
     if (!token) return err(c, 400, "bad_token");
     const environment = normalizeEnvironment(b.environment);
     if (!environment) return err(c, 400, "bad_environment");
-    await upsertDevice(c.env.DB, token, environment, deps.now());
+    const alerts = normalizeAlerts(b.alerts);
+    if (alerts === null) return err(c, 400, "bad_alerts");
+    await upsertDevice(c.env.DB, token, environment, deps.now(), alerts);
     return c.json({ ok: true });
   });
 
-  /** 外す（通知をオフにした） */
+  /** 外す（今のアプリは使わない・通知オフは alerts=false の PUT。古いビルドのために残す） */
   app.delete("/api/devices/:token", async (c) => {
     const token = normalizeToken(c.req.param("token"));
     if (!token) return err(c, 400, "bad_token");

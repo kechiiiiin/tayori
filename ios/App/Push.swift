@@ -1,11 +1,17 @@
 import SwiftUI
 import UIKit
 import UserNotifications
+import os
 
-/// 「メイン」の新着のプッシュ通知（Worker が APNs で送る・worker/src/notify.ts）。
-/// - 設定で オン（既定）のあいだ、起動のたびに許可を確かめ、端末トークンを Worker に登録する（PUT /api/devices）
-/// - オフにしたら Worker から外す（DELETE /api/devices/:token）
-/// - 通知をタップ → その記事をアプリ内 Safari で開く（戻ると「さっき開いた」のバー）
+let pushLog = Logger(subsystem: "jp.kechiiiiin.tayori", category: "push")
+
+/// プッシュ（Worker が APNs で送る・worker/src/notify.ts）。2種類ある:
+/// - お知らせ（alert）: 「メイン」の新着。設定の「通知」がオンで、通知が許可されている端末だけ
+/// - サイレント（background・content-available）: 番組に新しい回が入った cron で全端末へ。アプリが裏で起きて
+///   PodcastStore.refresh（新着の自動追加 → ダウンロード開始）を走らせる（BackgroundRefresh）
+/// 端末トークンは「通知」のオンオフ・許可に関係なく起動のたびに登録する（PUT /api/devices）。
+/// alerts = 「通知」オン かつ 許可あり。スイッチをオフにしても外さず alerts=false で登録し直す（サイレントは届き続ける）
+/// 通知をタップ → その記事をアプリ内 Safari で開く（戻ると「さっき開いた」のバー）
 @MainActor
 @Observable
 final class PushManager: NSObject {
@@ -38,52 +44,62 @@ final class PushManager: NSObject {
             await model.openItem(id: id)
         }
         await refreshAuthorization()
-        if enabled { await requestAndRegister() }
+        await requestAndRegister()
     }
 
     func refreshAuthorization() async {
         authorization = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
-    /// 設定のスイッチ
+    /// 前面に戻った: 設定アプリで通知の許可が変わっていたら登録し直す（alerts を合わせる）
+    func resync() async {
+        let before = authorization
+        await refreshAuthorization()
+        if authorization != before { await requestAndRegister() }
+    }
+
+    /// お知らせを受け取る（Worker に alerts として送る）
+    var alertsWanted: Bool {
+        enabled && (authorization == .authorized || authorization == .provisional || authorization == .ephemeral)
+    }
+
+    /// 設定のスイッチ。オフでも端末は外さない（alerts=false で登録し直す・サイレントプッシュは届く）
     func setEnabled(_ on: Bool) async {
         enabled = on
         UserDefaults.standard.set(on, forKey: Self.enabledKey)
-        if on {
+        if !on, let t = token {
+            await upload(token: t) // トークンは手元にある。その場で alerts=false にする
+        } else {
             await requestAndRegister()
-        } else if let t = token {
-            do {
-                try await TayoriAPI.shared.unregisterDevice(token: t)
-                lastError = nil
-            } catch {
-                lastError = error.localizedDescription
-            }
         }
     }
 
+    /// 「通知」オンで未決なら許可を求め、どの場合も端末トークンを取り直す（サイレントプッシュは許可が要らない）
     private func requestAndRegister() async {
-        let center = UNUserNotificationCenter.current()
-        if authorization == .notDetermined {
-            _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
+        if enabled && authorization == .notDetermined {
+            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
             await refreshAuthorization()
         }
-        guard authorization == .authorized || authorization == .provisional || authorization == .ephemeral else { return }
-        // トークンは AppDelegate の didRegisterForRemoteNotificationsWithDeviceToken に来る
+        // トークンは AppDelegate の didRegisterForRemoteNotificationsWithDeviceToken に来る（→ didRegister で Worker へ）
         UIApplication.shared.registerForRemoteNotifications()
     }
 
-    /// APNs から端末トークンが来た
+    /// APNs から端末トークンが来た: Worker へ登録（alerts = 「通知」オン かつ 許可あり）
     func didRegister(deviceToken: Data) {
         let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
         token = hex
-        guard enabled, TayoriAPI.shared.isConfigured else { return }
-        Task {
-            do {
-                try await TayoriAPI.shared.registerDevice(token: hex, environment: Self.apsEnvironment)
-                lastError = nil
-            } catch {
-                lastError = error.localizedDescription
-            }
+        Task { await upload(token: hex) }
+    }
+
+    private func upload(token hex: String) async {
+        guard TayoriAPI.shared.isConfigured else { return }
+        let alerts = alertsWanted
+        pushLog.info("register alerts=\(alerts, privacy: .public)")
+        do {
+            try await TayoriAPI.shared.registerDevice(token: hex, environment: Self.apsEnvironment, alerts: alerts)
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 
@@ -139,7 +155,26 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         // 起動直後の通知のタップを取りこぼさないよう、ここで delegate を据える
         UNUserNotificationCenter.current().delegate = PushManager.shared
+        // 保険の BGAppRefreshTask（登録は起動が終わる前でなければならない）。裏に回るたびに予約する
+        BackgroundRefresh.register()
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { BackgroundRefresh.schedule() }
+        }
         return true
+    }
+
+    /// サイレントプッシュ（番組の新しい回）: 新着を取り、キューへ足してダウンロードを始める。completionHandler は必ず1回
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        let aps = userInfo["aps"] as? [AnyHashable: Any]
+        let available = aps?["content-available"]
+        pushLog.info("remote notification content-available=\(String(describing: available), privacy: .public)")
+        guard let available, (available as? NSNumber)?.intValue == 1 || (available as? String) == "1" else { return completionHandler(.noData) }
+        MainActor.assumeIsolated {
+            _ = BackgroundRefresh.run(reason: "push", timeout: BackgroundRefresh.pushTimeout) { outcome in
+                completionHandler(outcome.fetchResult)
+            }
+        }
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

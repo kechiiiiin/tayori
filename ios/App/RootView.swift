@@ -79,6 +79,8 @@ struct RootView: View {
                 Task { await model.reload() }
                 // 番組の新着を、番組ごとの自動追加の設定に従ってキューへ（ポッドキャストのページを開いていなくても）
                 Task { await PodcastStore.shared.refresh() }
+                // 設定アプリで通知の許可が変わっていたら、お知らせを受け取るか（alerts）を登録し直す
+                Task { await PushManager.shared.resync() }
             }
         }
     }

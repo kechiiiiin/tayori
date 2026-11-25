@@ -68,7 +68,7 @@ private struct NotificationSection: View {
         } header: {
             Text("通知")
         } footer: {
-            Text("カテゴリ「メイン」のサイトに新しい記事が入ったら知らせます（1日以上前の記事は知らせません・1サイト3件まで）。")
+            Text("カテゴリ「メイン」のサイトに新しい記事が入ったら知らせます（1日以上前の記事は知らせません・1サイト3件まで）。オフにしても、番組の新しい回はアプリを開かずにキューへ入り、ダウンロードが始まります。")
         }
         .task { await push.refreshAuthorization() }
     }

@@ -1,7 +1,7 @@
 // フィードを取りに行く（cron・足した直後・「いますぐ」）。fetch はテストから差し替える
 import { findFeedLinks } from "./discover.ts";
 import type { ApnsSender } from "./apns.ts";
-import { pickNotices, sendNotices, type Notice } from "./notify.ts";
+import { pickNotices, sendNotices, sendWakeups, type Notice } from "./notify.ts";
 import { absUrl, parseFeed, type ParsedFeed } from "./parse.ts";
 import { convertToPodcast, upsertEpisodes } from "./podcast.ts";
 import {
@@ -105,7 +105,8 @@ export async function refreshFeed(db: D1Database, feed: FeedRow, deps: FetchDeps
     if (!parsed) throw new FetchError("フィードとして読めません");
     const fetched = { etag: got.etag, last_modified: got.last_modified, site_url: parsed.site_url, image_url: parsed.image_url };
     if (feed.kind === "podcast") {
-      // 番組: 新しい回だけ episodes へ（上限なし・既知の回は書かない）。プッシュは鳴らさない（「メイン」のカテゴリに入らない）
+      // 番組: 新しい回だけ episodes へ（上限なし・既知の回は書かない）。お知らせは鳴らさない（「メイン」のカテゴリに入らない）。
+      // 新しい回が入ったら refreshDue がサイレントプッシュで端末を起こす
       const added = await upsertEpisodes(db, feed.id, parsed.items, now);
       await markFetched(db, feed.id, fetched, now);
       return { status: "ok", added };
@@ -122,16 +123,22 @@ export async function refreshFeed(db: D1Database, feed: FeedRow, deps: FetchDeps
   }
 }
 
-/** 古い順に limit 本を取りに行く（同時に CONCURRENCY 本まで）。終わったら「メイン」の新着を知らせる */
+/**
+ * 古い順に limit 本を取りに行く（同時に CONCURRENCY 本まで）。終わったら「メイン」の新着を知らせる。
+ * 番組に新しい回が1つでも入ったら、登録済みの端末それぞれへサイレントプッシュを1通（何本・何回入っても1回の実行で1通）
+ */
 export async function refreshDue(db: D1Database, deps: FetchDeps, limit: number) {
   const feeds = await staleFeeds(db, limit);
   const results: RefreshResult[] = [];
   const notices: Notice[] = [];
+  let episodes = 0; // 番組に新しく入った回の数
   let next = 0;
   async function worker() {
     while (next < feeds.length) {
       const f = feeds[next++];
-      results.push(await refreshFeed(db, f, deps, notices));
+      const r = await refreshFeed(db, f, deps, notices);
+      if (f.kind === "podcast") episodes += r.added;
+      results.push(r);
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, feeds.length) }, worker));
@@ -141,12 +148,22 @@ export async function refreshDue(db: D1Database, deps: FetchDeps, limit: number)
   } catch (e) {
     console.warn("notify: " + (e instanceof Error ? e.name : "error"));
   }
+  let woken = 0;
+  if (episodes > 0) {
+    try {
+      woken = await sendWakeups(db, deps.push);
+    } catch (e) {
+      console.warn("wakeup: " + (e instanceof Error ? e.name : "error"));
+    }
+  }
   return {
     fetched: feeds.length,
     added: results.reduce((a, r) => a + r.added, 0),
     errors: results.filter((r) => r.status === "error").length,
     notices: notices.length,
     pushed,
+    episodes,
+    woken,
   };
 }
 
@@ -154,7 +171,7 @@ export async function refreshDue(db: D1Database, deps: FetchDeps, limit: number)
 export async function runScheduled(db: D1Database, deps: FetchDeps, perRun: number) {
   const purged = await purgeOld(db, deps.now());
   const r = await refreshDue(db, deps, perRun);
-  console.log(`cron: fetched=${r.fetched} added=${r.added} errors=${r.errors} purged=${purged} notices=${r.notices} pushed=${r.pushed}`);
+  console.log(`cron: fetched=${r.fetched} added=${r.added} errors=${r.errors} purged=${purged} notices=${r.notices} pushed=${r.pushed} episodes=${r.episodes} woken=${r.woken}`);
   return { ...r, purged };
 }
 
