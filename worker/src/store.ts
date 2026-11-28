@@ -36,6 +36,8 @@ export interface FeedView {
   image_url: string | null;
   last_fetched_at: string | null;
   last_error: string | null;
+  /** 段階2: 既読にした記事を rururu へ送るキューに積むか（サイト画面の「rururu に送る」） */
+  rururu_paw: boolean;
   unread: number;
   created_at: string;
 }
@@ -66,6 +68,7 @@ export interface FeedRow {
   last_modified: string | null;
   last_fetched_at: string | null;
   last_error: string | null;
+  rururu_paw: number;
 }
 
 // ---------------- カテゴリ ----------------
@@ -149,12 +152,12 @@ export async function deleteCategory(db: D1Database, id: number): Promise<boolea
 
 // ---------------- フィード ----------------
 
-const FEED_VIEW = `SELECT f.id, f.kind, f.category_id, f.title, f.site_url, f.feed_url, f.image_url, f.last_fetched_at, f.last_error, f.created_at,
+const FEED_VIEW = `SELECT f.id, f.kind, f.category_id, f.title, f.site_url, f.feed_url, f.image_url, f.last_fetched_at, f.last_error, f.rururu_paw, f.created_at,
        (SELECT COUNT(*) FROM items i WHERE i.feed_id = f.id AND i.read_at IS NULL) AS unread
   FROM feeds f`;
 
 function feedView(r: FeedView): FeedView {
-  return { ...r, unread: Number(r.unread) };
+  return { ...r, rururu_paw: Number(r.rururu_paw) === 1, unread: Number(r.unread) };
 }
 
 /** kind を渡せばその種類だけ（GET /api/feeds の既定は article＝サイト画面に番組を出さない） */
@@ -207,6 +210,22 @@ export async function insertFeed(
 export async function setFeedCategory(db: D1Database, id: number, categoryId: number | null): Promise<boolean> {
   const r = await db.prepare("UPDATE feeds SET category_id = ? WHERE id = ?").bind(categoryId, id).run();
   return (r.meta?.changes ?? 0) > 0;
+}
+
+/**
+ * 「rururu に送る」の切り替え。オンにしても過去の既読は積まない（オン以降に既読にしたものだけ）。
+ * オフにしたら、そのサイトのまだ送っていないキュー行は外す（送った控えは残す）
+ */
+export async function setFeedRururuPaw(db: D1Database, id: number, on: boolean): Promise<boolean> {
+  const r = await db.prepare("UPDATE feeds SET rururu_paw = ? WHERE id = ?").bind(on ? 1 : 0, id).run();
+  if ((r.meta?.changes ?? 0) === 0) return false;
+  if (!on) {
+    await db
+      .prepare("DELETE FROM paw_queue WHERE sent_at IS NULL AND item_id IN (SELECT id FROM items WHERE feed_id = ?)")
+      .bind(id)
+      .run();
+  }
+  return true;
 }
 
 /** 外す。記事（コメントごと）・番組の回・控え・paw_queue も消す */
@@ -393,13 +412,102 @@ export async function getItem(db: D1Database, id: number): Promise<ItemView | nu
   return db.prepare(`${ITEM_VIEW} WHERE i.id = ?`).bind(id).first<ItemView>();
 }
 
-/** 既読にする（もう既読なら時刻は変えない）／戻す */
+/**
+ * 既読にする（もう既読なら時刻は変えない）／戻す。
+ * 既読にしたとき（未読→既読のときだけ）、記事のサイトが rururu_paw=1 なら paw_queue へ積む（item_id が主キーなので重ならない）。
+ * 戻したら、まだ送っていないキュー行を外す（送った控えは残す＝もう一度既読にしても積み直さない）
+ */
 export async function setRead(db: D1Database, id: number, read: boolean, now: Date): Promise<ItemView | null> {
-  const r = read
-    ? await db.prepare("UPDATE items SET read_at = COALESCE(read_at, ?) WHERE id = ?").bind(now.toISOString(), id).run()
-    : await db.prepare("UPDATE items SET read_at = NULL WHERE id = ?").bind(id).run();
-  if ((r.meta?.changes ?? 0) === 0) return null;
+  if (!(await db.prepare("SELECT 1 AS x FROM items WHERE id = ?").bind(id).first())) return null;
+  const at = now.toISOString();
+  await (read
+    ? db.batch([
+        db
+          .prepare(
+            `INSERT OR IGNORE INTO paw_queue (item_id, queued_at)
+             SELECT i.id, ?1 FROM items i JOIN feeds f ON f.id = i.feed_id
+              WHERE i.id = ?2 AND i.read_at IS NULL AND f.rururu_paw = 1 AND f.kind = 'article'`,
+          )
+          .bind(at, id),
+        db.prepare("UPDATE items SET read_at = COALESCE(read_at, ?) WHERE id = ?").bind(at, id),
+      ])
+    : db.batch([
+        db.prepare("DELETE FROM paw_queue WHERE item_id = ? AND sent_at IS NULL").bind(id),
+        db.prepare("UPDATE items SET read_at = NULL WHERE id = ?").bind(id),
+      ]));
   return getItem(db, id);
+}
+
+// ---------------- rururu への paw キュー（段階2） ----------------
+
+export interface PawQueueEntry {
+  item_id: number;
+  url: string | null;
+  title: string;
+  feed_id: number;
+  feed_title: string;
+  feed_url: string;
+  site_url: string | null;
+  /** 送る時点のコメント（items.comment をそのまま。無ければ null） */
+  comment: string | null;
+  read_at: string | null;
+  queued_at: string;
+}
+
+export const MAX_SKIP_REASON = 200;
+
+/** まだ送っていない・飛ばしていないものを積んだ順に */
+export async function listPawQueue(db: D1Database): Promise<PawQueueEntry[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT q.item_id, i.url, i.title, i.feed_id, f.title AS feed_title, f.feed_url, f.site_url, i.comment, i.read_at, q.queued_at
+           FROM paw_queue q JOIN items i ON i.id = q.item_id JOIN feeds f ON f.id = i.feed_id
+          WHERE q.sent_at IS NULL AND q.skipped_at IS NULL
+          ORDER BY q.queued_at, q.item_id`,
+      )
+      .all<PawQueueEntry>()
+  ).results;
+}
+
+/** rururu の item の id: 正の整数（数字の文字列も受ける） */
+export function normalizeRururuItemId(v: unknown): number | null {
+  if (typeof v === "number" && Number.isSafeInteger(v) && v > 0) return v;
+  if (typeof v === "string" && /^[1-9]\d{0,15}$/.test(v.trim())) return Number(v.trim());
+  return null;
+}
+
+export function normalizeSkipReason(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.replace(/\s+/g, " ").trim();
+  return s && [...s].length <= MAX_SKIP_REASON ? s : null;
+}
+
+type PawMark = "ok" | "not_found" | "already_sent";
+
+async function pawRow(db: D1Database, itemId: number) {
+  return db.prepare("SELECT sent_at FROM paw_queue WHERE item_id = ?").bind(itemId).first<{ sent_at: string | null }>();
+}
+
+/** 送れた: rururu の item の id を控え、sent_at を入れる（飛ばしていたものでも送れたら送った扱い） */
+export async function markPawSent(db: D1Database, itemId: number, rururuItemId: number, now: Date): Promise<PawMark> {
+  const row = await pawRow(db, itemId);
+  if (!row) return "not_found";
+  if (row.sent_at) return "already_sent";
+  await db
+    .prepare("UPDATE paw_queue SET sent_at = ?, rururu_item_id = ?, skipped_at = NULL, skip_reason = NULL, error = NULL WHERE item_id = ?")
+    .bind(now.toISOString(), rururuItemId, itemId)
+    .run();
+  return "ok";
+}
+
+/** 送らずに外す（rururu に記事が無い・もう paw 済み など）。もう一度呼べば理由を上書き */
+export async function markPawSkipped(db: D1Database, itemId: number, reason: string, now: Date): Promise<PawMark> {
+  const row = await pawRow(db, itemId);
+  if (!row) return "not_found";
+  if (row.sent_at) return "already_sent";
+  await db.prepare("UPDATE paw_queue SET skipped_at = ?, skip_reason = ? WHERE item_id = ?").bind(now.toISOString(), reason, itemId).run();
+  return "ok";
 }
 
 export function normalizeComment(v: unknown): string | null | undefined {
@@ -422,7 +530,9 @@ export async function setComment(db: D1Database, id: number, comment: string | n
 export async function purgeOld(db: D1Database, now: Date): Promise<number> {
   const cutoff = new Date(now.getTime() - PURGE_DAYS * 86400_000).toISOString();
   // 番組の回は episodes にあり、ここでは消さない（items に残る番組の回はコメントつきなので対象外）
-  const cond = "read_at IS NOT NULL AND read_at < ?1 AND comment IS NULL";
+  // rururu へまだ送っていない（飛ばしてもいない）記事は、送るまで残す
+  const cond =
+    "read_at IS NOT NULL AND read_at < ?1 AND comment IS NULL AND id NOT IN (SELECT item_id FROM paw_queue WHERE sent_at IS NULL AND skipped_at IS NULL)";
   const out = await db.batch([
     db.prepare(`INSERT OR IGNORE INTO item_tombstones (feed_id, guid, created_at) SELECT feed_id, guid, ?2 FROM items WHERE ${cond}`).bind(cutoff, now.toISOString()),
     db.prepare(`DELETE FROM paw_queue WHERE item_id IN (SELECT id FROM items WHERE ${cond})`).bind(cutoff),

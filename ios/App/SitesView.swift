@@ -184,13 +184,17 @@ struct FeedMenu: View {
             Label("カテゴリを付け替える", systemImage: "folder")
         }
         Button { Task { await model.refreshFeed(feed) } } label: { Label("いますぐ取りに行く", systemImage: "arrow.clockwise") }
+        // 既読にした記事を rururu へ送るキューに積む（オン以降の既読だけ・送るのはヘスティアがまとめて）
+        Toggle(isOn: Binding(get: { feed.sendsToRururu }, set: { on in Task { await model.setRururuPaw(feed, on) } })) {
+            Label("rururu に送る", systemImage: "pawprint")
+        }
         if let e = feed.lastError {
             Text("取得できません（\(e)）")
         }
     }
 }
 
-/// サイトの1行: 頭文字・名前・URL・未読数（取れないときは赤い印）
+/// サイトの1行: 頭文字・名前・URL・未読数（取れないときは赤い印）。「rururu に送る」がオンなら足あとの印
 struct FeedRow: View {
     let feed: Feed
 
@@ -198,7 +202,15 @@ struct FeedRow: View {
         HStack(spacing: 10) {
             FaviconView(url: feed.iconURL, fallback: feed.initial, size: 28)
             VStack(alignment: .leading, spacing: 1) {
-                Text(feed.title).font(.subheadline).lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(feed.title).font(.subheadline).lineLimit(1)
+                    if feed.sendsToRururu {
+                        Image(systemName: "pawprint.fill")
+                            .font(.caption2)
+                            .foregroundStyle(Theme.accent)
+                            .accessibilityLabel("rururu に送る")
+                    }
+                }
                 Text(feed.displayURL).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)

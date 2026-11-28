@@ -261,6 +261,10 @@ final class AppModel {
         await run { _ = try await self.api.setFeedCategory(feed.id, categoryId) }
     }
 
+    func setRururuPaw(_ feed: Feed, _ on: Bool) async {
+        await run { _ = try await self.api.setFeedRururuPaw(feed.id, on) }
+    }
+
     func deleteFeed(_ feed: Feed) async {
         if feedFilter?.id == feed.id { feedFilter = nil }
         await run { try await self.api.deleteFeed(feed.id) }

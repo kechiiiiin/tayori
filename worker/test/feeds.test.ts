@@ -28,6 +28,7 @@ test("サイトの URL → <link rel=alternate> を上から試し、読めた�
       image_url: null,
       last_fetched_at: "2026-11-18T03:00:00.000Z",
       last_error: null,
+      rururu_paw: false,
       unread: 2,
       created_at: "2026-11-18T03:00:00.000Z",
     },

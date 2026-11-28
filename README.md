@@ -30,7 +30,7 @@ docs/screenshots/  シミュレータの実画面
 | 取得エラー | `feeds.last_error` に残し、アプリのサイト一覧に「取得できません」 |
 | 認証 | Cloudflare Access のサービストークン（アーカイブに埋め込み・Keychain の値があればそちら優先）。Worker は関所（sekisho）の `verify(token, aud, { allowServiceTokens: true })` で確かめ、Client ID を `ACCESS_SERVICE_CLIENT_IDS` と照合（無し・不正は 401、許可外は 403） |
 | ポッドキャスト（段階3） | `feeds.kind`（`article`／`podcast`）。番組の回は記事とは別の表 **`episodes`**（`enclosure_url`・`enclosure_type`・`duration_sec`・重複は `(feed_id, guid)`）。既読・コメント・控え・初回 20 件・既読 90 日の対象外で、**上限なしにフィードにある回を全部持ち、フィードから消えた回も消さない**。取得では新しい回だけ INSERT する（既知の回は音声・長さ・題名・URL が変わったときだけ UPDATE）。番組の回は記事一覧・カテゴリの数・`GET /api/feeds`（既定）には出ない。キュー・再生位置・自動追加・ダウンロードは iPhone の中（Worker と同期しない） |
-| 段階2 | `feeds.rururu_paw` と `paw_queue` は作ってあるだけ（rururu の書き込み API 待ち） |
+| 段階2（rururu への paw） | サイトごとのスイッチ `feeds.rururu_paw`（アプリのサイトの長押し「rururu に送る」）。オンのサイトの記事を**未読→既読にしたとき** `paw_queue` へ積む（item_id が主キーで重ならない）。**オンにした時点で過去の既読は遡らない**。既読を戻すと未送信の行は消える（送った控えは残り、再既読でも積み直さない）。スイッチをオフにすると、そのサイトの未送信の行は消える。番組（`kind = podcast`・`episodes`）は対象外。まだ送っていない記事は 90 日の掃除で消さない。送るのはヘスティアが rururu の Web 画面から（rururu に書き込み API が無いため）、結果を `sent`／`skip` で返す |
 
 ### API
 
@@ -44,17 +44,24 @@ docs/screenshots/  シミュレータの実画面
 | POST | `/api/categories` | `{ name }` |
 | PATCH | `/api/categories/:id` | `{ name?, sort? }`（sort は何番目に置くか・0 から） |
 | DELETE | `/api/categories/:id` | 中のサイトは未分類へ |
-| GET | `/api/feeds` | → `{ feeds: [{ id, category_id, title, site_url, feed_url, last_fetched_at, last_error, unread }] }` |
+| GET | `/api/feeds` | → `{ feeds: [{ id, kind, category_id, title, site_url, feed_url, image_url, last_fetched_at, last_error, rururu_paw, unread, created_at }] }`（`rururu_paw` は true/false） |
 | POST | `/api/feeds` | `{ url, category_id? }` → 201 `{ feed, created: true }`／購読済みは 200 `created: false`／見つからない 422 `feed_not_found`・取れない 422 `fetch_failed` |
-| PATCH | `/api/feeds/:id` | `{ category_id }`（null で未分類） |
+| PATCH | `/api/feeds/:id` | `{ category_id?, rururu_paw? }`（どちらか片方だけでもよい。category_id は null で未分類・rururu_paw は true/false 以外 400 `bad_rururu_paw`・番組はオンにできず 400 `bad_kind`）→ `{ feed }` |
 | DELETE | `/api/feeds/:id` | 記事とコメントも消える |
 | POST | `/api/feeds/:id/refresh` | いますぐ取りに行く |
+| GET | `/api/paw_queue` | rururu へまだ送っていない・飛ばしていないもの（積んだ順）→ `{ queue: [{ item_id, url, title, feed_id, feed_title, feed_url, site_url, comment, read_at, queued_at }] }`。`feed_title` がサイト名、`comment` は**いまの** `items.comment`（送る時点のものを memo に使う） |
+| POST | `/api/paw_queue/:item_id/sent` | `{ rururu_item_id }`（rururu 側の item の id・正の整数か数字の文字列）を控え `sent_at` を入れる → `{ ok: true }`。キューに無い 404・もう送った 409 `already_sent`・id が不正 400 `bad_rururu_item_id` |
+| POST | `/api/paw_queue/:item_id/skip` | `{ reason }`（例 `not_in_rururu`・`already_pawed`・200 文字まで）で送らずに外す（`skipped_at`・`skip_reason`）→ `{ ok: true }`。もう一度呼べば理由を上書き。キューに無い 404・もう送った 409・理由が空 400 `bad_reason`。飛ばしたものも後で `sent` にできる |
 | GET | `/api/podcasts` | 番組の一覧（段階3）→ `{ podcasts: [{ id, title, site_url, feed_url, image_url, last_fetched_at, last_error, episodes, latest_episode_id, latest_at }] }` |
 | POST | `/api/podcasts` | `{ url }`（フィードの URL か番組のサイト）→ 201 `{ podcast, created: true }`／購読済みは 200。記事として購読済みなら番組へ移して取り直す（`converted: true`） |
 | GET / DELETE | `/api/podcasts/:id` | 1番組／外す（回も消える） |
 | GET | `/api/podcasts/:id/episodes` | その番組の回（新しい順・既定 30 件・`limit` は 200 まで）。`before=<next>` で続き・`after_id`（その id より後を昇順で）→ `{ episodes, next }` |
 | GET | `/api/episodes` | 全番組の新着（新しい順）。クエリは同じ |
 | GET | `/api/episodes/:id` | 1回の詳細。一覧の項目に `description`（説明＝ショーノートの HTML・一覧には載せない）を足したもの → `{ episode }`。無ければ 404 |
+
+### rururu への paw キューの列を足す（段階2・一度だけ）
+
+`migrations/0009_paw_queue_send.sql` は `paw_queue` に `rururu_item_id`・`skipped_at`・`skip_reason` と索引を足すだけ（既存の行には触らない）。
 
 ### 「ポッドキャスト」カテゴリを番組へ移す（段階3・一度だけ）
 
@@ -183,4 +190,4 @@ rururu の App Password は rururu CLI の設定（`~/.config/rururu/config.json
 ## 決まっていない
 
 - Mac は同じアプリ（iPad 版を Apple Silicon で動かす）で済むか・TestFlight で入るか
-- 段階2: rururu の書き込み API の有無、rururu に無いサイトへの paw、送るタイミング
+- 段階2: memo 付きの paw が通るか（未確認）、rururu に無いサイトのチャンネル登録、送る手順のスキル化（`tayori-paw`）

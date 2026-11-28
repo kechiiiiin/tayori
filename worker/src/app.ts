@@ -21,11 +21,17 @@ import {
   listFeeds,
   listItems,
   listReadOn,
+  listPawQueue,
+  markPawSent,
+  markPawSkipped,
+  normalizeRururuItemId,
+  normalizeSkipReason,
   jstDayRange,
   normalizeComment,
   normalizeName,
   setComment,
   setFeedCategory,
+  setFeedRururuPaw,
   setRead,
   updateCategory,
 } from "./store.ts";
@@ -49,7 +55,7 @@ export const defaultDeps: AppDeps = {
 
 type C = Context<AppEnv>;
 
-function err(c: C, status: 400 | 404 | 422, error: string, extra: Record<string, unknown> = {}) {
+function err(c: C, status: 400 | 404 | 409 | 422, error: string, extra: Record<string, unknown> = {}) {
   return c.json({ error, ...extra }, status);
 }
 
@@ -202,16 +208,22 @@ export function createApp(deps: AppDeps = defaultDeps) {
     return c.json({ feed, created: r.kind === "created" }, r.kind === "created" ? 201 : 200);
   });
 
+  /** category_id（カテゴリの付け替え）と rururu_paw（rururu に送る・true/false）。どちらか片方だけでもよい */
   app.patch("/api/feeds/:id", async (c) => {
     const id = parseId(c.req.param("id"));
     if (id === null) return err(c, 404, "not_found");
-    const cat = await categoryArg(c, (await body(c)).category_id);
-    if (cat === "bad" || cat === undefined) return err(c, 400, "bad_category");
+    const b = await body(c);
+    const cat = await categoryArg(c, b.category_id);
+    if (cat === "bad") return err(c, 400, "bad_category");
+    const paw = b.rururu_paw;
+    if (paw !== undefined && typeof paw !== "boolean") return err(c, 400, "bad_rururu_paw");
+    if (cat === undefined && paw === undefined) return err(c, 400, "bad_category");
     const row = await getFeedRow(c.env.DB, id);
     if (!row) return err(c, 404, "not_found");
-    // 番組はカテゴリを持たない
-    if (row.kind === "podcast" && cat !== null) return err(c, 400, "bad_kind");
-    if (!(await setFeedCategory(c.env.DB, id, cat))) return err(c, 404, "not_found");
+    // 番組はカテゴリを持たない・rururu へも送らない（回は記事ではない）
+    if (row.kind === "podcast" && ((cat !== undefined && cat !== null) || paw === true)) return err(c, 400, "bad_kind");
+    if (cat !== undefined && !(await setFeedCategory(c.env.DB, id, cat))) return err(c, 404, "not_found");
+    if (paw !== undefined && !(await setFeedRururuPaw(c.env.DB, id, paw))) return err(c, 404, "not_found");
     return c.json({ feed: await getFeedView(c.env.DB, id) });
   });
 
@@ -234,6 +246,35 @@ export function createApp(deps: AppDeps = defaultDeps) {
       );
     }
     return c.json({ feed: await getFeedView(c.env.DB, row.id), result: r });
+  });
+
+  // ---------------- rururu への paw キュー（段階2） ----------------
+
+  /** まだ送っていない・飛ばしていないもの（積んだ順）。comment は送る時点の items.comment */
+  app.get("/api/paw_queue", async (c) => c.json({ queue: await listPawQueue(c.env.DB) }));
+
+  /** 送れた: { rururu_item_id }（rururu 側の item の id）を控える */
+  app.post("/api/paw_queue/:item_id/sent", async (c) => {
+    const id = parseId(c.req.param("item_id"));
+    if (id === null) return err(c, 404, "not_found");
+    const rid = normalizeRururuItemId((await body(c)).rururu_item_id);
+    if (rid === null) return err(c, 400, "bad_rururu_item_id");
+    const r = await markPawSent(c.env.DB, id, rid, deps.now());
+    if (r === "not_found") return err(c, 404, "not_found");
+    if (r === "already_sent") return err(c, 409, "already_sent");
+    return c.json({ ok: true });
+  });
+
+  /** 送らずに外す: { reason }（not_in_rururu・already_pawed など） */
+  app.post("/api/paw_queue/:item_id/skip", async (c) => {
+    const id = parseId(c.req.param("item_id"));
+    if (id === null) return err(c, 404, "not_found");
+    const reason = normalizeSkipReason((await body(c)).reason);
+    if (reason === null) return err(c, 400, "bad_reason");
+    const r = await markPawSkipped(c.env.DB, id, reason, deps.now());
+    if (r === "not_found") return err(c, 404, "not_found");
+    if (r === "already_sent") return err(c, 409, "already_sent");
+    return c.json({ ok: true });
   });
 
   // ---------------- ポッドキャスト（段階3） ----------------

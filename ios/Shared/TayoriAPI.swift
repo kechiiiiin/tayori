@@ -159,6 +159,12 @@ final class TayoriAPI: @unchecked Sendable {
         return r.feed
     }
 
+    /// 「rururu に送る」の切り替え（オン以降に既読にした記事だけが積まれる）
+    func setFeedRururuPaw(_ id: Int, _ on: Bool) async throws -> Feed {
+        let r: FeedEnvelope = try await call("PATCH", "/api/feeds/\(id)", body: ["rururu_paw": on])
+        return r.feed
+    }
+
     func deleteFeed(_ id: Int) async throws {
         _ = try await raw("DELETE", "/api/feeds/\(id)", query: [], body: nil)
     }

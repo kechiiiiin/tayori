@@ -98,8 +98,12 @@ struct Feed: Codable, Identifiable, Hashable, Sendable {
     let imageUrl: String?
     let lastFetchedAt: String?
     let lastError: String?
+    /// 既読にした記事を rururu へ送るキューに積むか（段階2・サイト画面の「rururu に送る」）。古い Worker では nil
+    let rururuPaw: Bool?
     let unread: Int
     let createdAt: String
+
+    var sendsToRururu: Bool { rururuPaw ?? false }
 
     /// 一覧に出す短い URL（スキームと末尾の / を落とす）
     var displayURL: String {

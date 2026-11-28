@@ -15,6 +15,10 @@ struct CommentSheet: View {
         _text = State(initialValue: initial)
     }
 
+    private var sendsToRururu: Bool {
+        model.feeds.first { $0.id == item.feedId }?.sendsToRururu ?? false
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("コメント").font(.headline).padding(.bottom, 4)
@@ -30,7 +34,9 @@ struct CommentSheet: View {
                 .padding(6)
                 .frame(minHeight: 110, maxHeight: 180)
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(uiColor: .separator), lineWidth: 1))
-            Text("自分だけのメモです。いまは rururu には送りません。")
+            Text(sendsToRururu
+                 ? "このサイトは rururu に送る設定です。既読にした記事は、送るときにこのコメントを paw のメモに載せます（rururu では公開）。"
+                 : "自分だけのメモです。rururu には送りません。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 8)
