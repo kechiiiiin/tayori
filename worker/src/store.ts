@@ -526,7 +526,7 @@ export async function setComment(db: D1Database, id: number, comment: string | n
   return getItem(db, id);
 }
 
-/** 既読になって PURGE_DAYS 日たち、コメントの無い記事を消す（guid は控えに残し、次の取得で戻らないように） */
+/** 既読になって PURGE_DAYS 日たち、コメントの無い記事を消す（guid は控えに残し、次の取得で戻らないように）。既読の social_posts も同じ日数で消す */
 export async function purgeOld(db: D1Database, now: Date): Promise<number> {
   const cutoff = new Date(now.getTime() - PURGE_DAYS * 86400_000).toISOString();
   // 番組の回は episodes にあり、ここでは消さない（items に残る番組の回はコメントつきなので対象外）
@@ -537,6 +537,305 @@ export async function purgeOld(db: D1Database, now: Date): Promise<number> {
     db.prepare(`INSERT OR IGNORE INTO item_tombstones (feed_id, guid, created_at) SELECT feed_id, guid, ?2 FROM items WHERE ${cond}`).bind(cutoff, now.toISOString()),
     db.prepare(`DELETE FROM paw_queue WHERE item_id IN (SELECT id FROM items WHERE ${cond})`).bind(cutoff),
     db.prepare(`DELETE FROM items WHERE ${cond} RETURNING id`).bind(cutoff),
+    // 段階4: 既読の投稿も 90 日で消す（未読は残す・数は返り値に含めない）
+    db.prepare("DELETE FROM social_posts WHERE read_at IS NOT NULL AND read_at < ?").bind(cutoff),
   ]);
   return (out[2] as { results?: unknown[] }).results?.length ?? 0;
+}
+
+// ---------------- 段階4: X・Instagram の投稿（social_posts・ボットから受け取る） ----------------
+
+export type SocialPlatform = "x" | "instagram";
+
+export function isPlatform(v: unknown): v is SocialPlatform {
+  return v === "x" || v === "instagram";
+}
+
+/** 1回で受け取る投稿の上限（REST・MCP 共通） */
+export const MAX_SOCIAL_POSTS = 50;
+export const SOCIAL_PAGE_SIZE = 50;
+export const MAX_SOCIAL_PAGE = 200;
+/** known で返す post_id の上限と、since を省いたときに遡る日数 */
+export const MAX_KNOWN_IDS = 2000;
+export const KNOWN_DEFAULT_DAYS = 7;
+const MAX_POST_TEXT = 30000;
+const MAX_MEDIA = 20;
+const MAX_URL = 2048;
+const MAX_QUOTED_JSON = 50000;
+
+/** 投稿の URL として受け付けるホスト（正規 URL でないものを弾く） */
+const PLATFORM_HOSTS: Record<SocialPlatform, string[]> = {
+  x: ["x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com", "mobile.x.com"],
+  instagram: ["instagram.com", "www.instagram.com"],
+};
+
+export interface SocialMedia {
+  type: "image" | "video" | "gif";
+  url: string;
+}
+
+export interface SocialPostInput {
+  platform: SocialPlatform;
+  post_id: string;
+  url: string;
+  author_name: string | null;
+  author_handle: string;
+  author_avatar_url: string | null;
+  text: string;
+  media: SocialMedia[];
+  posted_at: string;
+  like_count: number | null;
+  repost_count: number | null;
+  reply_count: number | null;
+  view_count: number | null;
+  quoted: Record<string, unknown> | null;
+  source: string;
+}
+
+export interface SocialPostView extends SocialPostInput {
+  id: number;
+  fetched_at: string;
+  read_at: string | null;
+}
+
+export interface SocialAddResult {
+  inserted: number;
+  skipped: number;
+  rejected: { index: number; reason: string }[];
+}
+
+/** ISO 8601（日時＋タイムゾーン）→ UTC の toISOString。日付だけ・タイムゾーン無し・暦に無い日時は null */
+export function normalizeIsoTime(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})$/.test(v)) return null;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
+}
+
+function httpUrl(v: unknown, hosts?: string[]): string | null {
+  if (typeof v !== "string" || v.length > MAX_URL) return null;
+  try {
+    const u = new URL(v);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+    if (hosts && !hosts.includes(u.hostname.toLowerCase())) return null;
+    return v;
+  } catch {
+    return null;
+  }
+}
+
+function optText(v: unknown, max: number): string | null | undefined {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "string" || [...v].length > max) return undefined;
+  return v.trim() ? v : null;
+}
+
+function optCount(v: unknown): number | null | undefined {
+  if (v === undefined || v === null) return null;
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : undefined;
+}
+
+/**
+ * 1件を確かめて形をそろえる。不正なら理由（英語の短い文）を返す。
+ * **text は改変しない**（trim も改行の直しもしない）。author_handle だけ先頭の @ を落とす
+ */
+export function normalizeSocialPost(v: unknown, defaultSource: string): SocialPostInput | string {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return "post must be an object";
+  const p = v as Record<string, unknown>;
+  if (!isPlatform(p.platform)) return 'platform must be "x" or "instagram"';
+  const platform = p.platform;
+  if (typeof p.post_id !== "string") return "post_id must be a string (send X ids as strings to keep all digits)";
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(p.post_id)) return "post_id must be 1-64 characters of A-Z a-z 0-9 _ -";
+  const url = httpUrl(p.url, PLATFORM_HOSTS[platform]);
+  if (!url) return `url must be the post's canonical https URL on ${PLATFORM_HOSTS[platform][0]}`;
+  if (typeof p.author_handle !== "string") return "author_handle is required";
+  const handle = p.author_handle.trim().replace(/^@/, "");
+  if (!/^[A-Za-z0-9_.]{1,64}$/.test(handle)) return "author_handle must be the account name without spaces (e.g. kechiiiiin)";
+  const authorName = optText(p.author_name, 200);
+  if (authorName === undefined) return "author_name must be a string up to 200 characters";
+  let avatar: string | null = null;
+  if (p.author_avatar_url !== undefined && p.author_avatar_url !== null && p.author_avatar_url !== "") {
+    avatar = httpUrl(p.author_avatar_url);
+    if (!avatar) return "author_avatar_url must be an http(s) URL";
+  }
+  if (typeof p.text !== "string") return "text is required (use an empty string when the post has no text)";
+  if ([...p.text].length > MAX_POST_TEXT) return `text must be up to ${MAX_POST_TEXT} characters`;
+  const media: SocialMedia[] = [];
+  if (p.media !== undefined && p.media !== null) {
+    if (!Array.isArray(p.media) || p.media.length > MAX_MEDIA) return `media must be an array of up to ${MAX_MEDIA} items`;
+    for (const [i, m] of p.media.entries()) {
+      const o = m && typeof m === "object" && !Array.isArray(m) ? (m as Record<string, unknown>) : null;
+      if (!o || (o.type !== "image" && o.type !== "video" && o.type !== "gif")) return `media[${i}].type must be "image", "video" or "gif"`;
+      const mu = httpUrl(o.url);
+      if (!mu) return `media[${i}].url must be an http(s) URL`;
+      media.push({ type: o.type, url: mu });
+    }
+  }
+  const postedAt = normalizeIsoTime(p.posted_at);
+  if (!postedAt) return "posted_at must be ISO 8601 with a time zone (e.g. 2026-11-29T09:30:00Z)";
+  const counts: Record<"like_count" | "repost_count" | "reply_count" | "view_count", number | null> = {
+    like_count: null,
+    repost_count: null,
+    reply_count: null,
+    view_count: null,
+  };
+  for (const k of Object.keys(counts) as (keyof typeof counts)[]) {
+    const n = optCount(p[k]);
+    if (n === undefined) return `${k} must be a non-negative integer or null`;
+    counts[k] = n;
+  }
+  let quoted: Record<string, unknown> | null = null;
+  if (p.quoted !== undefined && p.quoted !== null) {
+    if (typeof p.quoted !== "object" || Array.isArray(p.quoted)) return "quoted must be an object or null";
+    if (JSON.stringify(p.quoted).length > MAX_QUOTED_JSON) return "quoted is too large";
+    quoted = p.quoted as Record<string, unknown>;
+  }
+  let source = defaultSource;
+  if (p.source !== undefined && p.source !== null && p.source !== "") {
+    if (typeof p.source !== "string" || !/^[A-Za-z0-9_.-]{1,50}$/.test(p.source)) return "source must be a short name like grok-bot";
+    source = p.source;
+  }
+  return {
+    platform,
+    post_id: p.post_id,
+    url,
+    author_name: authorName,
+    author_handle: handle,
+    author_avatar_url: avatar,
+    text: p.text,
+    media,
+    posted_at: postedAt,
+    ...counts,
+    quoted,
+    source,
+  };
+}
+
+/**
+ * 投稿の配列を入れる（REST・MCP 共通）。配列でない・上限超えは "bad_posts"／"too_many_posts"（何も入れない）。
+ * 不正な行だけ理由つきで弾き、正しい行は入れる。(platform, post_id) が既にあれば skipped（同じ要求の中の重複も）
+ */
+export async function addSocialPosts(
+  db: D1Database,
+  input: unknown,
+  now: Date,
+  defaultSource: string,
+): Promise<SocialAddResult | "bad_posts" | "too_many_posts"> {
+  if (!Array.isArray(input)) return "bad_posts";
+  if (input.length > MAX_SOCIAL_POSTS) return "too_many_posts";
+  const rejected: SocialAddResult["rejected"] = [];
+  const ok: SocialPostInput[] = [];
+  input.forEach((v, index) => {
+    const r = normalizeSocialPost(v, defaultSource);
+    if (typeof r === "string") rejected.push({ index, reason: r });
+    else ok.push(r);
+  });
+  if (ok.length === 0) return { inserted: 0, skipped: 0, rejected };
+  const fetchedAt = now.toISOString();
+  const out = await db.batch(
+    ok.map((p) =>
+      db
+        .prepare(
+          `INSERT INTO social_posts (platform, post_id, url, author_name, author_handle, author_avatar_url, text, media, posted_at,
+             like_count, repost_count, reply_count, view_count, quoted, source, fetched_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (platform, post_id) DO NOTHING RETURNING id`,
+        )
+        .bind(
+          p.platform,
+          p.post_id,
+          p.url,
+          p.author_name,
+          p.author_handle,
+          p.author_avatar_url,
+          p.text,
+          JSON.stringify(p.media),
+          p.posted_at,
+          p.like_count,
+          p.repost_count,
+          p.reply_count,
+          p.view_count,
+          p.quoted === null ? null : JSON.stringify(p.quoted),
+          p.source,
+          fetchedAt,
+        ),
+    ),
+  );
+  const inserted = out.filter((r) => ((r as { results?: unknown[] }).results?.length ?? 0) > 0).length;
+  return { inserted, skipped: ok.length - inserted, rejected };
+}
+
+interface SocialRow extends Omit<SocialPostView, "media" | "quoted"> {
+  media: string;
+  quoted: string | null;
+}
+
+function socialView(r: SocialRow): SocialPostView {
+  const parse = <T>(s: string | null, fallback: T): T => {
+    if (s === null) return fallback;
+    try {
+      return JSON.parse(s) as T;
+    } catch {
+      return fallback;
+    }
+  };
+  return { ...r, media: parse<SocialMedia[]>(r.media, []), quoted: parse<Record<string, unknown> | null>(r.quoted, null) };
+}
+
+/** 投稿の一覧（新しい順）。before は posted_at（それより前）か next の値（posted_at|id） */
+export async function listSocialPosts(
+  db: D1Database,
+  q: { platform?: SocialPlatform; before?: { posted_at: string; id: number | null }; limit?: number },
+): Promise<{ posts: SocialPostView[]; next: string | null }> {
+  const limit = Math.min(Math.max(q.limit ?? SOCIAL_PAGE_SIZE, 1), MAX_SOCIAL_PAGE);
+  const where: string[] = [];
+  const args: (string | number)[] = [];
+  if (q.platform) {
+    where.push("platform = ?");
+    args.push(q.platform);
+  }
+  if (q.before) {
+    if (q.before.id === null) {
+      where.push("posted_at < ?");
+      args.push(q.before.posted_at);
+    } else {
+      where.push("(posted_at < ? OR (posted_at = ? AND id < ?))");
+      args.push(q.before.posted_at, q.before.posted_at, q.before.id);
+    }
+  }
+  const { results } = await db
+    .prepare(
+      `SELECT id, platform, post_id, url, author_name, author_handle, author_avatar_url, text, media, posted_at,
+         like_count, repost_count, reply_count, view_count, quoted, source, fetched_at, read_at
+       FROM social_posts ${where.length ? "WHERE " + where.join(" AND ") : ""}
+       ORDER BY posted_at DESC, id DESC LIMIT ?`,
+    )
+    .bind(...args, limit + 1)
+    .all<SocialRow>();
+  const posts = results.slice(0, limit).map(socialView);
+  const last = posts[posts.length - 1];
+  return { posts, next: results.length > limit && last ? `${last.posted_at}|${last.id}` : null };
+}
+
+/** before の値: ISO 8601 の日時か、一覧の next（posted_at|id）。不正は null */
+export function decodeSocialBefore(s: string): { posted_at: string; id: number | null } | null {
+  const m = /^(.+)\|(\d{1,15})$/.exec(s);
+  const t = normalizeIsoTime(m ? m[1] : s);
+  if (!t) return null;
+  return { posted_at: t, id: m ? Number(m[2]) : null };
+}
+
+/** ボットの重複よけ: since（posted_at がそれ以降）の post_id を新しい順に。since を省けば直近 KNOWN_DEFAULT_DAYS 日 */
+export async function listKnownPostIds(
+  db: D1Database,
+  platform: SocialPlatform,
+  since: string | undefined,
+  now: Date,
+): Promise<{ platform: SocialPlatform; since: string; post_ids: string[] }> {
+  const from = since ?? new Date(now.getTime() - KNOWN_DEFAULT_DAYS * 86400_000).toISOString();
+  const { results } = await db
+    .prepare("SELECT post_id FROM social_posts WHERE platform = ? AND posted_at >= ? ORDER BY posted_at DESC, id DESC LIMIT ?")
+    .bind(platform, from, MAX_KNOWN_IDS)
+    .all<{ post_id: string }>();
+  return { platform, since: from, post_ids: results.map((r) => r.post_id) };
 }

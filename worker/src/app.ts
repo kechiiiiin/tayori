@@ -5,11 +5,19 @@ import { apnsConfig, httpApnsSender, type ApnsSender } from "./apns.ts";
 import { deleteDevice, normalizeAlerts, normalizeEnvironment, normalizeToken, sendNotices, upsertDevice, type Notice } from "./notify.ts";
 import { requireAccess } from "./auth.ts";
 import { addFeed, normalizeUrl, refreshFeed, type FetchDeps } from "./fetcher.ts";
+import { handleMcp } from "./mcp.ts";
 import { getEpisode, getPodcast, listEpisodes, listPodcasts } from "./podcast.ts";
 import {
+  addSocialPosts,
   categoryExists,
   createCategory,
   decodeCursor,
+  decodeSocialBefore,
+  isPlatform,
+  listKnownPostIds,
+  listSocialPosts,
+  MAX_SOCIAL_POSTS,
+  normalizeIsoTime,
   deleteCategory,
   deleteFeed,
   getFeedRow,
@@ -344,6 +352,59 @@ export function createApp(deps: AppDeps = defaultDeps) {
     const id = parseId(c.req.param("id"));
     const episode = id === null ? null : await getEpisode(c.env.DB, id);
     return episode ? c.json({ episode }) : err(c, 404, "not_found");
+  });
+
+  // ---------------- X・Instagram の投稿（段階4の小さな試し・ボットから受け取る） ----------------
+
+  /** 投稿を入れる: 配列そのものか { posts: [...] }（最大 MAX_SOCIAL_POSTS 件）→ { inserted, skipped, rejected: [{ index, reason }] } */
+  app.post("/api/social/posts", async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      return err(c, 400, "bad_posts");
+    }
+    const posts = Array.isArray(raw) ? raw : raw && typeof raw === "object" ? (raw as Record<string, unknown>).posts : undefined;
+    const r = await addSocialPosts(c.env.DB, posts, deps.now(), "api");
+    if (r === "bad_posts") return err(c, 400, "bad_posts");
+    if (r === "too_many_posts") return err(c, 400, "too_many_posts", { max: MAX_SOCIAL_POSTS });
+    return c.json(r);
+  });
+
+  /** 一覧（新しい順）: platform=x|instagram（省略で両方）・before=<posted_at か next>・limit（既定 50・200 まで）→ { posts, next } */
+  app.get("/api/social/posts", async (c) => {
+    const pq = c.req.query("platform");
+    if (pq !== undefined && pq !== "" && !isPlatform(pq)) return err(c, 400, "bad_platform");
+    const bq = c.req.query("before");
+    const before = bq ? decodeSocialBefore(bq) : undefined;
+    if (before === null) return err(c, 400, "bad_before");
+    const lq = c.req.query("limit");
+    const limit = lq ? parseId(lq) : undefined;
+    if (limit === null) return err(c, 400, "bad_limit");
+    return c.json(await listSocialPosts(c.env.DB, { platform: pq ? (pq as "x" | "instagram") : undefined, before, limit }));
+  });
+
+  /** ボットの重複よけ: platform（必須）・since=<ISO 8601>（省略で直近7日）→ { platform, since, post_ids } */
+  app.get("/api/social/known", async (c) => {
+    const platform = c.req.query("platform");
+    if (!isPlatform(platform)) return err(c, 400, "bad_platform");
+    const sq = c.req.query("since");
+    let since: string | undefined;
+    if (sq) {
+      const t = normalizeIsoTime(sq);
+      if (!t) return err(c, 400, "bad_since");
+      since = t;
+    }
+    return c.json(await listKnownPostIds(c.env.DB, platform, since, deps.now()));
+  });
+
+  // ---------------- MCP（Streamable HTTP・状態なし・JSON で返す） ----------------
+
+  app.post("/api/mcp", (c) => handleMcp(c, deps.now()));
+  // SSE の口（GET）・セッションの終わり（DELETE）は持たない
+  app.on(["GET", "DELETE"], "/api/mcp", (c) => {
+    c.header("Allow", "POST");
+    return c.json({ error: "method_not_allowed" }, 405);
   });
 
   // ---------------- プッシュ通知の端末 ----------------

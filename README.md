@@ -58,6 +58,16 @@ docs/screenshots/  シミュレータの実画面
 | GET | `/api/podcasts/:id/episodes` | その番組の回（新しい順・既定 30 件・`limit` は 200 まで）。`before=<next>` で続き・`after_id`（その id より後を昇順で）→ `{ episodes, next }` |
 | GET | `/api/episodes` | 全番組の新着（新しい順）。クエリは同じ |
 | GET | `/api/episodes/:id` | 1回の詳細。一覧の項目に `description`（説明＝ショーノートの HTML・一覧には載せない）を足したもの → `{ episode }`。無ければ 404 |
+| POST | `/api/social/posts` | 段階4の試し: X・Instagram の投稿を入れる。本文は配列そのものか `{ posts: [...] }`（最大 50 件・超えたら 400 `too_many_posts`・配列でなければ 400 `bad_posts`）。1件は `{ platform: "x"\|"instagram", post_id（文字列）, url（投稿の正規 URL・x.com／twitter.com／instagram.com）, author_handle, author_name?, author_avatar_url?, text（改変せずそのまま保存・空文字可）, media?: [{ type: "image"\|"video"\|"gif", url }], posted_at（ISO 8601・タイムゾーンつき・UTC にそろえて保存）, like_count?, repost_count?, reply_count?, view_count?, quoted?（引用元のオブジェクト）, source?（既定 "api"） }` → `{ inserted, skipped, rejected: [{ index, reason }] }`。`(platform, post_id)` が既にあれば skipped（同じ要求の中の重複も）。不正な行だけ弾き、正しい行は入れる |
+| GET | `/api/social/posts` | `platform=x\|instagram`（省略で両方）・`before=<posted_at の ISO 8601 か next>`・`limit`（既定 50・200 まで）→ `{ posts, next }`（`posted_at` の新しい順。`media` は配列・`quoted` はオブジェクトか null・`read_at`） |
+| GET | `/api/social/known` | ボットの重複よけ。`platform`（必須）・`since=<ISO 8601>`（`posted_at` がそれ以降・省略で直近 7 日）→ `{ platform, since, post_ids }`（新しい順・2000 件まで） |
+| POST | `/api/mcp` | MCP（Streamable HTTP の状態を持たない版・JSON-RPC 2.0 を1通ずつ・答えは `application/json`・SSE なし）。`initialize`（`protocolVersion` は知っている版ならその値、ほかは `2025-06-18`・`serverInfo.name` は `tayori`）・`notifications/initialized`（ほか通知は 202 で本文なし）・`ping`・`tools/list`・`tools/call`。ツールは `add_posts`（`{ posts }`・REST と同じ形・source の既定 `"mcp"`）と `list_known_post_ids`（`{ platform, since? }`）。結果は `content: [{ type: "text", text: <JSON> }]`、不正な入力・弾いた行があれば `isError: true`。知らないツールは -32602、知らないメソッドは -32601。認証は他の API と同じ Access のサービストークン（Grok Bot には MCP 登録時に `CF-Access-Client-Id`／`CF-Access-Client-Secret` ヘッダで渡す） |
+| GET / DELETE | `/api/mcp` | 405（`Allow: POST`） |
+
+### X・Instagram の投稿を受け取る表（段階4の試し・一度だけ）
+
+`migrations/0010_social_posts.sql` は `social_posts`（`UNIQUE(platform, post_id)`・一覧用と掃除用の索引）を作るだけ（既存の表には触らない）。
+cron の 90 日の掃除で、**既読（`read_at` あり）の投稿だけ**消す。未読は残す（既読にする口はまだ無い・iOS の画面と一緒に足す）。
 
 ### rururu への paw キューの列を足す（段階2・一度だけ）
 

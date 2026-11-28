@@ -101,23 +101,27 @@ export function setup(o: { now?: string; env?: Partial<Env> } = {}) {
     props: {},
   } as unknown as ExecutionContext;
 
-  async function call(method: string, path: string, body?: unknown, token: string | null = "ok.jwt") {
-    const headers: Record<string, string> = {};
+  /** 生の Response（本文が JSON でない・空の応答を見るとき）。body が文字列ならそのまま送る */
+  async function request(method: string, path: string, body?: unknown, token: string | null = "ok.jwt", extra: Record<string, string> = {}) {
+    const headers: Record<string, string> = { ...extra };
     if (token) headers["Cf-Access-Jwt-Assertion"] = token;
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    const res = await app.request(
+    return app.request(
       `https://tayori.example.com${path}`,
-      { method, headers, body: body === undefined ? undefined : JSON.stringify(body) },
+      { method, headers, body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body) },
       env,
       ctx,
     );
+  }
+  async function call(method: string, path: string, body?: unknown, token: string | null = "ok.jwt") {
+    const res = await request(method, path, body, token);
     const json = (await res.json()) as any;
     return { status: res.status, json };
   }
   function count(sql: string, ...args: (string | number | null)[]): number {
     return Number((raw.prepare(sql).get(...args) as { n: number }).n);
   }
-  return { db, raw, clock, web, env, deps, call, count };
+  return { db, raw, clock, web, env, deps, call, request, count };
 }
 
 /** n 回のポッドキャストの RSS（新しい順・1日ずつ古くなる・どの回にも音声と長さ＝回の番号で決まる）。prefix で guid を変える */
