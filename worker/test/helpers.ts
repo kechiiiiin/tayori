@@ -121,7 +121,7 @@ export function setup(o: { now?: string; env?: Partial<Env> } = {}) {
   function count(sql: string, ...args: (string | number | null)[]): number {
     return Number((raw.prepare(sql).get(...args) as { n: number }).n);
   }
-  return { db, raw, clock, web, env, deps, call, request, count };
+  return { db, raw, clock, web, env, deps, app, call, request, count };
 }
 
 /** n 回のポッドキャストの RSS（新しい順・1日ずつ古くなる・どの回にも音声と長さ＝回の番号で決まる）。prefix で guid を変える */

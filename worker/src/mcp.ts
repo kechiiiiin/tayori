@@ -18,6 +18,8 @@ export const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 export const SERVER_INFO = { name: "tayori", version: "0.1.0" };
 /** MCP 経由で入れた投稿の source の既定（行に source があればそちら） */
 export const MCP_DEFAULT_SOURCE = "mcp";
+/** /mcp（Bearer の口）経由の既定 */
+export const MCP_BEARER_DEFAULT_SOURCE = "grok-bot";
 
 type Id = string | number | null;
 
@@ -128,9 +130,9 @@ function isId(v: unknown): v is string | number {
   return typeof v === "string" || (typeof v === "number" && Number.isFinite(v));
 }
 
-async function callTool(c: Context<AppEnv>, name: string, args: Record<string, unknown>, now: Date) {
+async function callTool(c: Context<AppEnv>, name: string, args: Record<string, unknown>, now: Date, defaultSource: string) {
   if (name === "add_posts") {
-    const r = await addSocialPosts(c.env.DB, args.posts, now, MCP_DEFAULT_SOURCE);
+    const r = await addSocialPosts(c.env.DB, args.posts, now, defaultSource);
     if (r === "bad_posts") return toolText({ error: "bad_posts", message: "posts must be an array of post objects" }, true);
     if (r === "too_many_posts") return toolText({ error: "too_many_posts", message: `send at most ${MAX_SOCIAL_POSTS} posts per call` }, true);
     // 弾いた行があれば isError（入った行は入っている・数は本文に）
@@ -148,7 +150,7 @@ async function callTool(c: Context<AppEnv>, name: string, args: Record<string, u
 }
 
 /** POST /api/mcp の本体 */
-export async function handleMcp(c: Context<AppEnv>, now: Date): Promise<Response> {
+export async function handleMcp(c: Context<AppEnv>, now: Date, defaultSource: string = MCP_DEFAULT_SOURCE): Promise<Response> {
   let msg: unknown;
   try {
     msg = JSON.parse(await c.req.text());
@@ -191,7 +193,7 @@ export async function handleMcp(c: Context<AppEnv>, now: Date): Promise<Response
       if (args !== undefined && (args === null || typeof args !== "object" || Array.isArray(args))) {
         return c.json(rpcResult(id, toolText({ error: "bad_arguments", message: "arguments must be an object" }, true)));
       }
-      return c.json(rpcResult(id, await callTool(c, name, (args ?? {}) as Record<string, unknown>, now)));
+      return c.json(rpcResult(id, await callTool(c, name, (args ?? {}) as Record<string, unknown>, now, defaultSource)));
     }
     default:
       return c.json(rpcError(id, -32601, `Method not found: ${m.method}`));

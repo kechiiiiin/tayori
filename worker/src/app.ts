@@ -5,7 +5,8 @@ import { apnsConfig, httpApnsSender, type ApnsSender } from "./apns.ts";
 import { deleteDevice, normalizeAlerts, normalizeEnvironment, normalizeToken, sendNotices, upsertDevice, type Notice } from "./notify.ts";
 import { requireAccess } from "./auth.ts";
 import { addFeed, normalizeUrl, refreshFeed, type FetchDeps } from "./fetcher.ts";
-import { handleMcp } from "./mcp.ts";
+import { handleMcp, MCP_BEARER_DEFAULT_SOURCE } from "./mcp.ts";
+import { requireMcpToken } from "./mcp-auth.ts";
 import { getEpisode, getPodcast, listEpisodes, listPodcasts } from "./podcast.ts";
 import {
   addSocialPosts,
@@ -406,6 +407,24 @@ export function createApp(deps: AppDeps = defaultDeps) {
     c.header("Allow", "POST");
     return c.json({ error: "method_not_allowed" }, 405);
   });
+
+  // /mcp: Access の外（Access 側でパスを素通しにする）。Worker 自身が Bearer（MCP_TOKENS）で守る。中身は /api/mcp と同じ
+  app.use("/mcp", requireMcpToken);
+  app.post("/mcp", (c) => handleMcp(c, deps.now(), MCP_BEARER_DEFAULT_SOURCE));
+  app.on(["GET", "DELETE"], "/mcp", (c) => {
+    c.header("Allow", "POST");
+    return c.json({ error: "method_not_allowed" }, 405);
+  });
+  // OAuth の確認には「OAuth なし」と返す（認証なし）
+  for (const path of [
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/*",
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/oauth-authorization-server/*",
+    "/.well-known/openid-configuration",
+  ]) {
+    app.get(path, (c) => c.json({ error: "not_found" }, 404));
+  }
 
   // ---------------- プッシュ通知の端末 ----------------
 

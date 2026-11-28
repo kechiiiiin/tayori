@@ -63,6 +63,8 @@ docs/screenshots/  シミュレータの実画面
 | GET | `/api/social/known` | ボットの重複よけ。`platform`（必須）・`since=<ISO 8601>`（`posted_at` がそれ以降・省略で直近 7 日）→ `{ platform, since, post_ids }`（新しい順・2000 件まで） |
 | POST | `/api/mcp` | MCP（Streamable HTTP の状態を持たない版・JSON-RPC 2.0 を1通ずつ・答えは `application/json`・SSE なし）。`initialize`（`protocolVersion` は知っている版ならその値、ほかは `2025-06-18`・`serverInfo.name` は `tayori`）・`notifications/initialized`（ほか通知は 202 で本文なし）・`ping`・`tools/list`・`tools/call`。ツールは `add_posts`（`{ posts }`・REST と同じ形・source の既定 `"mcp"`）と `list_known_post_ids`（`{ platform, since? }`）。結果は `content: [{ type: "text", text: <JSON> }]`、不正な入力・弾いた行があれば `isError: true`。知らないツールは -32602、知らないメソッドは -32601。認証は他の API と同じ Access のサービストークン（Grok Bot には MCP 登録時に `CF-Access-Client-Id`／`CF-Access-Client-Secret` ヘッダで渡す） |
 | GET / DELETE | `/api/mcp` | 405（`Allow: POST`） |
+| POST / GET / DELETE | `/mcp` | `/api/mcp` と同じ MCP を **Access の外**に出した口（Access 側でこのパスを素通しにする）。認証は Worker 自身が `Authorization: Bearer <token>` を secret `MCP_TOKENS`（カンマ区切り・前後空白は除く・空要素は無視・**32 文字未満は無視**・未設定なら全部拒否）と定数時間で照合。失敗は 401 `{"error":"unauthorized"}`（`WWW-Authenticate` は付けない＝OAuth に誘導しない）。この口から入った投稿の `source` の既定は `"grok-bot"`。GET / DELETE は 405 |
+| GET | `/.well-known/oauth-protected-resource`（と `/*`）・`/.well-known/oauth-authorization-server`（と `/*`）・`/.well-known/openid-configuration` | OAuth の確認への答え。認証なしで 404 `{"error":"not_found"}`（「OAuth なし」の意思表示。Access の外に出す前提） |
 
 ### X・Instagram の投稿を受け取る表（段階4の試し・一度だけ）
 

@@ -11,6 +11,9 @@ export interface Env {
   /** 通すサービストークンの Client ID（カンマ区切り・secret）。**空なら1本も通さない** */
   ACCESS_SERVICE_CLIENT_IDS?: string;
 
+  /** /mcp（Access の外）の Bearer トークン（カンマ区切り・secret）。各32文字以上。**未設定・空なら全部拒否** */
+  MCP_TOKENS?: string;
+
   // ---- フィードの取得（vars） ----
   /** cron 1回で取りに行くフィードの数（古い順）。Workers Free の subrequest 50 に収めるため。既定 40 */
   FETCH_PER_RUN?: string;

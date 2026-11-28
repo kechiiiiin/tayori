@@ -260,3 +260,87 @@ test("トークンが無ければ投稿の口も MCP も 401・書き込まな�
   }
   assert.equal(s.count("SELECT COUNT(*) AS n FROM social_posts"), 0);
 });
+
+// ---------------- 4. /mcp（Access の外・Bearer） ----------------
+
+const TOK = "t".repeat(40);
+const TOK2 = "u".repeat(33);
+
+async function bearer(s: ReturnType<typeof setup>, msg: unknown, auth?: string, method = "POST") {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (auth !== undefined) headers.Authorization = auth;
+  return s.app.request("https://tayori.example.com/mcp", { method, headers, body: method === "POST" ? JSON.stringify(msg) : undefined }, s.env, {
+    waitUntil() {},
+    passThroughOnException() {},
+    props: {},
+  } as unknown as ExecutionContext);
+}
+
+test("/mcp: 正しい Bearer で initialize → tools/list → add_posts が通り source は grok-bot（Access の JWT は不要）", async () => {
+  const s = setup({ now: "2026-11-29T03:00:00Z", env: { MCP_TOKENS: ` short , ${TOK} ,, ${TOK2}` } });
+  const auth = `Bearer ${TOK2}`;
+  let res = await bearer(s, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }, auth);
+  assert.equal(res.status, 200);
+  assert.equal(((await res.json()) as any).result.serverInfo.name, "tayori");
+  res = await bearer(s, { jsonrpc: "2.0", id: 2, method: "tools/list" }, `Bearer ${TOK}`);
+  assert.deepEqual(((await res.json()) as any).result.tools.map((t: any) => t.name), ["add_posts", "list_known_post_ids"]);
+  res = await bearer(s, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "add_posts", arguments: { posts: [post(1, { source: undefined }), post(2, { source: "other-bot" })] } } }, auth);
+  const call = (await res.json()) as any;
+  assert.deepEqual(JSON.parse(call.result.content[0].text), { inserted: 2, skipped: 0, rejected: [] });
+  assert.equal(s.count("SELECT COUNT(*) AS n FROM social_posts WHERE source = 'grok-bot'"), 1);
+  assert.equal(s.count("SELECT COUNT(*) AS n FROM social_posts WHERE source = 'other-bot'"), 1);
+  // GET / DELETE は 405
+  for (const m of ["GET", "DELETE"]) {
+    res = await bearer(s, undefined, auth, m);
+    assert.equal(res.status, 405);
+    assert.equal(res.headers.get("allow"), "POST");
+  }
+});
+
+test("/mcp: Bearer なし・違う・MCP_TOKENS 未設定／空・短いトークンは 401 で WWW-Authenticate なし", async () => {
+  const ping = { jsonrpc: "2.0", id: 1, method: "ping" };
+  const cases: [string, string | undefined, string | undefined][] = [
+    ["Bearer なし", TOK, undefined],
+    ["違うトークン", TOK, `Bearer ${"x".repeat(40)}`],
+    ["Bearer 以外の方式", TOK, `Basic ${TOK}`],
+    ["未設定", undefined, `Bearer ${TOK}`],
+    ["空", "  , ", `Bearer ${TOK}`],
+    ["短いトークン", "a".repeat(31), `Bearer ${"a".repeat(31)}`],
+    ["空の Bearer", "a".repeat(31), "Bearer "],
+  ];
+  for (const [name, tokens, auth] of cases) {
+    const s = setup({ env: { MCP_TOKENS: tokens } });
+    const res = await bearer(s, ping, auth);
+    assert.equal(res.status, 401, name);
+    assert.equal(res.headers.get("www-authenticate"), null, name);
+    assert.deepEqual(await res.json(), { error: "unauthorized" }, name);
+  }
+  // GET も同じく 401（認証が先）
+  const s = setup({ env: { MCP_TOKENS: TOK } });
+  assert.equal((await bearer(s, undefined, undefined, "GET")).status, 401);
+});
+
+test("/.well-known の OAuth 確認は認証なしで 404 JSON", async () => {
+  const s = setup();
+  for (const p of [
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/mcp",
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/oauth-authorization-server/mcp",
+    "/.well-known/openid-configuration",
+  ]) {
+    const res = await s.request("GET", p, undefined, null);
+    assert.equal(res.status, 404, p);
+    assert.deepEqual(await res.json(), { error: "not_found" }, p);
+    assert.equal(res.headers.get("www-authenticate"), null, p);
+  }
+});
+
+test("/api/social/posts は Bearer だけでは通らない（Access 必須のまま）", async () => {
+  const s = setup({ env: { MCP_TOKENS: TOK } });
+  const res = await s.request("POST", "/api/social/posts", [post(1)], null, { Authorization: `Bearer ${TOK}` });
+  assert.equal(res.status, 401);
+  assert.equal(s.count("SELECT COUNT(*) AS n FROM social_posts"), 0);
+  const r2 = await s.request("POST", "/api/mcp", { jsonrpc: "2.0", id: 1, method: "ping" }, null, { Authorization: `Bearer ${TOK}` });
+  assert.equal(r2.status, 401);
+});
